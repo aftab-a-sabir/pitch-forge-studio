@@ -139,7 +139,12 @@ export const generateScript = createServerFn({ method: "POST" })
       max,
     });
 
-    const model = "openai/gpt-5-mini";
+    const model = "google/gemini-3-flash-preview";
+    console.log("script.generate.start", {
+      project_id: project.id,
+      model,
+      target_words: target,
+    });
     let draft = await callAI({ apiKey, model, system, user: userPrompt });
 
     let words = countWords(draft);
