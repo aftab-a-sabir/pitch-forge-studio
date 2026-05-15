@@ -204,12 +204,17 @@ function NewProjectPage() {
       } else {
         const created = await create({ data: parsed.data });
         toast.success("Project created");
-        // Always route through the script preview step so the user can review
-        // (and edit) the generated script before kicking off the render.
-        navigate({
-          to: "/projects/$projectId/script",
-          params: { projectId: created.id },
-        });
+        // Photo+voice (Avatar IV) renders read a stored script verbatim, so
+        // route through the script preview step. The no-photo path uses
+        // HeyGen Video Agents which writes its own script — skip the step.
+        if (parsed.data.headshot_url) {
+          navigate({
+            to: "/projects/$projectId/script",
+            params: { projectId: created.id },
+          });
+          return;
+        }
+        navigate({ to: "/projects" });
         return;
       }
     } catch (err) {
