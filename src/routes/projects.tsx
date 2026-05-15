@@ -34,7 +34,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Pencil, Trash2 } from "lucide-react";
+import { Eye, Pencil, Trash2 } from "lucide-react";
 
 export const Route = createFileRoute("/projects")({
   component: ProjectsPage,
@@ -291,9 +291,14 @@ function ProjectsPage() {
                           </Button>
                         )
                       )}
-                      <Button size="icon" variant="ghost" asChild title="Edit">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        asChild
+                        title={p.status === "ready" ? "View" : "Edit"}
+                      >
                         <Link to="/new" search={{ edit: p.id }}>
-                          <Pencil />
+                          {p.status === "ready" ? <Eye /> : <Pencil />}
                         </Link>
                       </Button>
                       <Button
