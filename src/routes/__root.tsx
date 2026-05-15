@@ -8,8 +8,12 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 
+import { useEffect } from "react";
+
 import appCss from "../styles.css?url";
 import { Toaster } from "@/components/ui/sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { initAnalytics, identify, resetAnalytics } from "@/lib/analytics";
 
 function NotFoundComponent() {
   return (
@@ -111,6 +115,23 @@ function RootShell({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+
+  useEffect(() => {
+    initAnalytics();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        identify(session.user.id, { email: session.user.email });
+      }
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        resetAnalytics();
+      } else if (session?.user) {
+        identify(session.user.id, { email: session.user.email });
+      }
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
