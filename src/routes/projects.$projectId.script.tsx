@@ -304,9 +304,15 @@ function ScriptPreviewPage() {
                 </p>
               </div>
             ) : null}
-            {!generating && !script && loadError ? (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-destructive">
-                {loadError}
+            {phase === "script-error" && !script ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+                <AlertCircle className="h-6 w-6 text-destructive" />
+                <p className="text-sm text-destructive">
+                  {errorMessage ?? "Script generation failed."}
+                </p>
+                <Button size="sm" onClick={onRegenerate}>
+                  Try again
+                </Button>
               </div>
             ) : null}
           </div>
