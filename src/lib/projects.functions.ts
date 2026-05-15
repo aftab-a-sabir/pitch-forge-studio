@@ -40,7 +40,7 @@ export const listProjects = createServerFn({ method: "GET" })
     const { supabase } = context;
     const { data, error } = await supabase
       .from("projects")
-      .select("id, product_url, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error")
+      .select("id, product_url, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url")
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return { projects: data ?? [] };
