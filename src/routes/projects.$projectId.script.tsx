@@ -1,10 +1,10 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2, Sparkles, AlertCircle } from "lucide-react";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { getProject } from "@/lib/projects.functions";
 import { generateScript, saveScript } from "@/lib/script.functions";
@@ -19,6 +19,34 @@ function countWords(s: string): number {
   return s.trim().split(/\s+/).filter(Boolean).length;
 }
 
+const SCRIPT_TIMEOUT_MS = 60_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)),
+      ms,
+    );
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
+type Phase =
+  | "loading-project"
+  | "writing-script"
+  | "ready"
+  | "project-error"
+  | "script-error";
+
 function ScriptPreviewPage() {
   const checking = useRequireAuth();
   const navigate = useNavigate();
@@ -28,8 +56,14 @@ function ScriptPreviewPage() {
   const persist = useServerFn(saveScript);
   const startRender = useServerFn(generateProjectVideo);
 
-  const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
+  // Stable refs for serverFns so the bootstrap effect doesn't re-fire on every render.
+  const fetchProjectRef = useRef(fetchProject);
+  const regenerateRef = useRef(regenerate);
+  fetchProjectRef.current = fetchProject;
+  regenerateRef.current = regenerate;
+
+  const [phase, setPhase] = useState<Phase>("loading-project");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
   const [productUrl, setProductUrl] = useState("");
   const [persona, setPersona] = useState("");
@@ -38,13 +72,48 @@ function ScriptPreviewPage() {
   const [script, setScript] = useState("");
   const [target, setTarget] = useState(0);
   const [justUpdated, setJustUpdated] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const generating = phase === "writing-script";
+
+  const runGenerate = useCallback(
+    async (cancelled: () => boolean) => {
+      setPhase("writing-script");
+      setErrorMessage(null);
+      try {
+        const res = await withTimeout(
+          regenerateRef.current({ data: { projectId } }),
+          SCRIPT_TIMEOUT_MS,
+          "Script generation",
+        );
+        if (cancelled()) return;
+        setScript(res.script);
+        setPhase("ready");
+        setJustUpdated(true);
+        setTimeout(() => setJustUpdated(false), 1200);
+      } catch (e) {
+        if (cancelled()) return;
+        const msg = e instanceof Error ? e.message : "Failed to generate script";
+        setErrorMessage(msg);
+        setPhase("script-error");
+        toast.error(msg);
+      }
+    },
+    [projectId],
+  );
 
   useEffect(() => {
+    if (checking) return;
     let cancelled = false;
+    const isCancelled = () => cancelled;
     (async () => {
+      setPhase("loading-project");
+      setErrorMessage(null);
       try {
-        const { project } = await fetchProject({ data: { projectId } });
+        const { project } = await withTimeout(
+          fetchProjectRef.current({ data: { projectId } }),
+          15_000,
+          "Loading project",
+        );
         if (cancelled) return;
         setProductUrl(project.product_url);
         setPersona(project.target_persona);
@@ -54,52 +123,57 @@ function ScriptPreviewPage() {
         const stored = (project as { script?: string | null }).script ?? "";
         if (stored.trim()) {
           setScript(stored);
-          setLoading(false);
+          setPhase("ready");
           return;
         }
-        // No stored script yet — generate the first draft.
-        setGenerating(true);
-        try {
-          const res = await regenerate({ data: { projectId } });
-          if (!cancelled) {
-            setScript(res.script);
-            setJustUpdated(true);
-            setTimeout(() => setJustUpdated(false), 1200);
-          }
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : "Failed to generate script";
-          if (!cancelled) setLoadError(msg);
-          toast.error(msg);
-        } finally {
-          if (!cancelled) setGenerating(false);
-        }
+        await runGenerate(isCancelled);
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Failed to load project");
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : "Failed to load project";
+        setErrorMessage(msg);
+        setPhase("project-error");
+        toast.error(msg);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId, fetchProject, regenerate]);
+  }, [projectId, checking, runGenerate]);
 
-  const onRegenerate = async () => {
-    setGenerating(true);
-    setLoadError(null);
-    try {
-      const res = await regenerate({ data: { projectId } });
-      setScript(res.script);
-      setJustUpdated(true);
-      setTimeout(() => setJustUpdated(false), 1200);
-      toast.success(`Regenerated (${res.words} words)`);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to regenerate";
-      setLoadError(msg);
-      toast.error(msg);
-    } finally {
-      setGenerating(false);
-    }
+  const onRegenerate = () => {
+    void runGenerate(() => false);
+  };
+
+  const onRetryLoad = () => {
+    // Force the bootstrap effect to re-run by toggling phase; simplest is to reload.
+    setPhase("loading-project");
+    setErrorMessage(null);
+    (async () => {
+      try {
+        const { project } = await withTimeout(
+          fetchProjectRef.current({ data: { projectId } }),
+          15_000,
+          "Loading project",
+        );
+        setProductUrl(project.product_url);
+        setPersona(project.target_persona);
+        setSeconds(project.video_length_seconds);
+        setHeadshot(project.headshot_url ?? null);
+        setTarget(targetWordCount(project.video_length_seconds));
+        const stored = (project as { script?: string | null }).script ?? "";
+        if (stored.trim()) {
+          setScript(stored);
+          setPhase("ready");
+        } else {
+          await runGenerate(() => false);
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Failed to load project";
+        setErrorMessage(msg);
+        setPhase("project-error");
+        toast.error(msg);
+      }
+    })();
   };
 
   const onRender = async () => {
@@ -120,10 +194,36 @@ function ScriptPreviewPage() {
   const words = countWords(script);
   const estSeconds = Math.round(words / 2.7);
 
-  if (checking || loading) {
+  if (checking) {
     return (
       <div className="flex min-h-screen items-center justify-center text-muted-foreground">
-        Loading…
+        Checking sign-in…
+      </div>
+    );
+  }
+
+  if (phase === "loading-project") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        <p>Loading project…</p>
+      </div>
+    );
+  }
+
+  if (phase === "project-error") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-6 text-center">
+        <AlertCircle className="h-8 w-8 text-destructive" />
+        <p className="max-w-md text-sm text-destructive">
+          {errorMessage ?? "Could not load this project."}
+        </p>
+        <div className="flex gap-3">
+          <Button onClick={onRetryLoad}>Try again</Button>
+          <Button variant="ghost" asChild>
+            <Link to="/projects">Back to projects</Link>
+          </Button>
+        </div>
       </div>
     );
   }
