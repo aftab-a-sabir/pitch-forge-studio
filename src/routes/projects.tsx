@@ -263,7 +263,7 @@ function ProjectsPage() {
           }
         }}
       >
-        <DialogContent className="p-4 w-fit max-w-[min(90vw,72rem)]">
+        <DialogContent className="p-0 gap-0 border-0 bg-transparent shadow-none w-fit max-w-[min(90vw,72rem)] overflow-hidden">
           <DialogTitle className="sr-only">Video player</DialogTitle>
           {playing?.video_url ? (
             <div
