@@ -46,8 +46,11 @@ export type Database = {
           heygen_session_id: string | null
           heygen_video_id: string | null
           id: string
+          product_brief: Json | null
           product_summary: string | null
           product_url: string
+          script: string | null
+          script_updated_at: string | null
           status: string
           target_languages: string[]
           target_persona: string
@@ -63,8 +66,11 @@ export type Database = {
           heygen_session_id?: string | null
           heygen_video_id?: string | null
           id?: string
+          product_brief?: Json | null
           product_summary?: string | null
           product_url: string
+          script?: string | null
+          script_updated_at?: string | null
           status?: string
           target_languages?: string[]
           target_persona: string
@@ -80,8 +86,11 @@ export type Database = {
           heygen_session_id?: string | null
           heygen_video_id?: string | null
           id?: string
+          product_brief?: Json | null
           product_summary?: string | null
           product_url?: string
+          script?: string | null
+          script_updated_at?: string | null
           status?: string
           target_languages?: string[]
           target_persona?: string
