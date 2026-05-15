@@ -22,12 +22,18 @@ function Index() {
           <p className="mt-6 text-lg text-muted-foreground">
             Paste your product URL and get ready-to-use AI avatar sales videos for each customer persona in minutes.
           </p>
-          <div className="mt-8">
+          <div className="mt-8 flex justify-center gap-3">
             <Link
-              to="/new"
+              to="/signup"
               className="inline-flex items-center justify-center rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             >
-              Start
+              Sign up
+            </Link>
+            <Link
+              to="/signin"
+              className="inline-flex items-center justify-center rounded-md border border-input bg-background px-6 py-3 text-sm font-medium text-foreground hover:bg-accent"
+            >
+              Sign in
             </Link>
           </div>
         </div>
