@@ -6,7 +6,14 @@ import { Button } from "@/components/ui/button";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { listProjects } from "@/lib/projects.functions";
-import { generateProjectVideo } from "@/lib/heygen.functions";
+import { generateProjectVideo, checkProjectStatus } from "@/lib/heygen.functions";
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -31,6 +38,7 @@ type StoredProject = {
   heygen_session_id?: string | null;
   heygen_video_id?: string | null;
   heygen_last_error?: string | null;
+  video_url?: string | null;
 };
 
 function ProjectsPage() {
@@ -39,8 +47,11 @@ function ProjectsPage() {
   const [email, setEmail] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
+  const [playing, setPlaying] = useState<StoredProject | null>(null);
   const fetchProjects = useServerFn(listProjects);
   const generateVideo = useServerFn(generateProjectVideo);
+  const checkStatus = useServerFn(checkProjectStatus);
 
   const reload = async () => {
     try {
@@ -63,6 +74,21 @@ function ProjectsPage() {
       await reload();
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const handleCheck = async (projectId: string) => {
+    setCheckingId(projectId);
+    try {
+      const res = await checkStatus({ data: { projectId } });
+      if (res.status === "ready") toast.success("Video is ready!");
+      else toast.message(`Status: ${res.status}`);
+      await reload();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to check status";
+      toast.error(msg);
+    } finally {
+      setCheckingId(null);
     }
   };
 
@@ -160,20 +186,44 @@ function ProjectsPage() {
                     <TableCell>{p.target_persona}</TableCell>
                     <TableCell>{p.target_languages.join(", ")}</TableCell>
                     <TableCell>{p.video_length_seconds}s</TableCell>
-                    <TableCell>{p.status}</TableCell>
+                    <TableCell>
+                      <Badge variant={statusVariant(p.status)}>{p.status}</Badge>
+                      {p.status === "error" && p.heygen_last_error ? (
+                        <div className="mt-1 max-w-xs truncate text-xs text-destructive" title={p.heygen_last_error}>
+                          {p.heygen_last_error}
+                        </div>
+                      ) : null}
+                    </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {p.heygen_video_id ? `${p.heygen_video_id.slice(0, 12)}…` : "—"}
                   </TableCell>
                     <TableCell>{new Date(p.created_at).toLocaleDateString()}</TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busyId === p.id}
-                      onClick={() => handleGenerate(p.id)}
-                    >
-                      {busyId === p.id ? "Starting…" : "Generate video"}
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      {p.status === "ready" && p.video_url ? (
+                        <Button size="sm" onClick={() => setPlaying(p)}>
+                          Play Video
+                        </Button>
+                      ) : p.status === "processing" ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={checkingId === p.id}
+                          onClick={() => handleCheck(p.id)}
+                        >
+                          {checkingId === p.id ? "Checking…" : "Check for Video"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={busyId === p.id}
+                          onClick={() => handleGenerate(p.id)}
+                        >
+                          {busyId === p.id ? "Starting…" : p.status === "error" ? "Retry" : "Generate video"}
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                   </TableRow>
                 ))
@@ -182,6 +232,29 @@ function ProjectsPage() {
           </Table>
         </div>
       </main>
+      <Dialog open={!!playing} onOpenChange={(open) => !open && setPlaying(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="truncate">{playing?.product_url}</DialogTitle>
+          </DialogHeader>
+          {playing?.video_url ? (
+            <video src={playing.video_url} controls autoPlay className="w-full rounded-md" />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  switch (status) {
+    case "ready":
+      return "default";
+    case "processing":
+      return "secondary";
+    case "error":
+      return "destructive";
+    default:
+      return "outline";
+  }
 }
