@@ -41,6 +41,9 @@ export type Database = {
       projects: {
         Row: {
           created_at: string
+          heygen_last_error: string | null
+          heygen_session_id: string | null
+          heygen_video_id: string | null
           id: string
           product_summary: string | null
           product_url: string
@@ -52,6 +55,9 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          heygen_last_error?: string | null
+          heygen_session_id?: string | null
+          heygen_video_id?: string | null
           id?: string
           product_summary?: string | null
           product_url: string
@@ -63,6 +69,9 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          heygen_last_error?: string | null
+          heygen_session_id?: string | null
+          heygen_video_id?: string | null
           id?: string
           product_summary?: string | null
           product_url?: string
