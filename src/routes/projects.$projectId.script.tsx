@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Loader2, Sparkles } from "lucide-react";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { getProject } from "@/lib/projects.functions";
 import { generateScript, saveScript } from "@/lib/script.functions";
@@ -36,6 +37,8 @@ function ScriptPreviewPage() {
   const [headshot, setHeadshot] = useState<string | null>(null);
   const [script, setScript] = useState("");
   const [target, setTarget] = useState(0);
+  const [justUpdated, setJustUpdated] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,9 +61,15 @@ function ScriptPreviewPage() {
         setGenerating(true);
         try {
           const res = await regenerate({ data: { projectId } });
-          if (!cancelled) setScript(res.script);
+          if (!cancelled) {
+            setScript(res.script);
+            setJustUpdated(true);
+            setTimeout(() => setJustUpdated(false), 1200);
+          }
         } catch (e) {
-          toast.error(e instanceof Error ? e.message : "Failed to generate script");
+          const msg = e instanceof Error ? e.message : "Failed to generate script";
+          if (!cancelled) setLoadError(msg);
+          toast.error(msg);
         } finally {
           if (!cancelled) setGenerating(false);
         }
@@ -77,12 +86,17 @@ function ScriptPreviewPage() {
 
   const onRegenerate = async () => {
     setGenerating(true);
+    setLoadError(null);
     try {
       const res = await regenerate({ data: { projectId } });
       setScript(res.script);
+      setJustUpdated(true);
+      setTimeout(() => setJustUpdated(false), 1200);
       toast.success(`Regenerated (${res.words} words)`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to regenerate");
+      const msg = e instanceof Error ? e.message : "Failed to regenerate";
+      setLoadError(msg);
+      toast.error(msg);
     } finally {
       setGenerating(false);
     }
@@ -159,18 +173,46 @@ function ScriptPreviewPage() {
           {headshot ? <div className="text-xs">Avatar IV (presenter photo supplied)</div> : null}
         </div>
 
-        <div className="mt-6 space-y-2">
-          <Textarea
-            value={script}
-            onChange={(e) => setScript(e.target.value)}
-            rows={14}
-            placeholder={generating ? "Generating script…" : "Script will appear here"}
-            disabled={generating}
-            className="font-sans text-base leading-relaxed"
-          />
+        <div className="mt-8 space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
+              Generated script
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              The avatar will read this aloud
+            </span>
+          </div>
+          <div className="relative" aria-busy={generating}>
+            <Textarea
+              value={script}
+              onChange={(e) => setScript(e.target.value)}
+              rows={14}
+              placeholder="Script will appear here"
+              disabled={generating}
+              className={`font-sans text-base leading-relaxed transition-shadow ${
+                justUpdated ? "ring-2 ring-primary/60" : ""
+              } ${generating ? "opacity-40" : ""}`}
+            />
+            {generating ? (
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-md bg-background/60 backdrop-blur-sm">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                <p className="text-sm font-medium text-foreground">
+                  Writing your script…
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  This usually takes 10–20 seconds
+                </p>
+              </div>
+            ) : null}
+            {!generating && !script && loadError ? (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-destructive">
+                {loadError}
+              </div>
+            ) : null}
+          </div>
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>
-              {words} words · ~{estSeconds}s spoken
+              {generating ? "—" : `${words} words · ~${estSeconds}s spoken`}
             </span>
             <span>Target ~{target} words</span>
           </div>
@@ -181,17 +223,39 @@ function ScriptPreviewPage() {
             type="button"
             onClick={onRender}
             disabled={rendering || generating || !script.trim()}
-            className="bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md shadow-primary/20"
+            className={
+              rendering
+                ? "bg-muted text-muted-foreground shadow-none ring-2 ring-primary/40 animate-pulse"
+                : "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md shadow-primary/20"
+            }
           >
-            {rendering ? "Starting render…" : "Looks good — render video"}
+            {rendering ? (
+              <>
+                <Loader2 className="animate-spin" />
+                Starting render…
+              </>
+            ) : (
+              <>
+                <Sparkles />
+                Looks good — render video
+              </>
+            )}
           </Button>
           <Button
             type="button"
             variant="outline"
             onClick={onRegenerate}
             disabled={generating || rendering}
+            className={generating ? "opacity-70" : ""}
           >
-            {generating ? "Regenerating…" : "Regenerate"}
+            {generating ? (
+              <>
+                <Loader2 className="animate-spin" />
+                Regenerating…
+              </>
+            ) : (
+              "Regenerate"
+            )}
           </Button>
           <Button type="button" variant="ghost" asChild>
             <Link to="/projects">Back to projects</Link>
