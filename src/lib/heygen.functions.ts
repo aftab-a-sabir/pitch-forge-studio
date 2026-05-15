@@ -143,7 +143,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
     const { data: project, error } = await supabase
       .from("projects")
       .select(
-        "id, product_url, target_persona, target_languages, video_length_seconds, headshot_url",
+        "id, product_url, target_persona, target_languages, video_length_seconds, headshot_url, voice_id",
       )
       .eq("id", data.projectId)
       .single();
@@ -166,7 +166,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
           body: JSON.stringify({
             image_url: project.headshot_url,
             script,
-            voice_id: DEFAULT_AVATAR_IV_VOICE_ID,
+            voice_id: project.voice_id ?? DEFAULT_AVATAR_IV_VOICE_ID,
             resolution: "1080p",
             aspect_ratio: "16:9",
             expressiveness: "medium",
