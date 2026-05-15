@@ -82,7 +82,7 @@ export const updateProject = createServerFn({ method: "POST" })
     if (fetchErr) throw new Error(fetchErr.message);
     if (!existing) throw new Error("Project not found");
 
-    const updates: Record<string, unknown> = {
+    const baseUpdates = {
       product_url: data.product_url,
       product_summary: data.product_summary ?? null,
       target_persona: data.target_persona,
@@ -90,13 +90,16 @@ export const updateProject = createServerFn({ method: "POST" })
       video_length_seconds: data.video_length_seconds,
       headshot_url: data.headshot_url ?? null,
     };
-    if (existing.status === "error") {
-      updates.status = "pending";
-      updates.heygen_last_error = null;
-      updates.heygen_session_id = null;
-      updates.heygen_video_id = null;
-      updates.video_url = null;
-    }
+    const updates = existing.status === "error"
+      ? {
+          ...baseUpdates,
+          status: "pending",
+          heygen_last_error: null,
+          heygen_session_id: null,
+          heygen_video_id: null,
+          video_url: null,
+        }
+      : baseUpdates;
 
     const { error } = await supabase
       .from("projects")
