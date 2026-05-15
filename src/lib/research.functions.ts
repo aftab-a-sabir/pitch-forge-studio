@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { requireRuntimeSecret } from "./runtime-env.server";
 
 type ProductBrief = {
   name: string;
@@ -89,7 +90,8 @@ async function extractBrief(args: {
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${args.apiKey}`,
+      "Lovable-API-Key": args.apiKey,
+      "X-Lovable-AIG-SDK": "vercel-ai-sdk",
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -145,6 +147,9 @@ async function extractBrief(args: {
 
   if (!res.ok) {
     const body = await res.text();
+    console.error("research.ai_gateway_failed", { status: res.status, body: body.slice(0, 500) });
+    if (res.status === 402) throw new Error("AI credits are exhausted. Add credits and try again.");
+    if (res.status === 429) throw new Error("AI is rate limited. Please try again shortly.");
     throw new Error(`AI gateway failed (${res.status}): ${body.slice(0, 300)}`);
   }
   const json = (await res.json()) as {
@@ -166,8 +171,7 @@ export const researchProduct = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const apiKey = process.env.LOVABLE_API_KEY;
-    if (!apiKey) throw new Error("LOVABLE_API_KEY is not configured");
+    const apiKey = requireRuntimeSecret("LOVABLE_API_KEY", "AI product research");
 
     const { data: project, error } = await supabase
       .from("projects")
