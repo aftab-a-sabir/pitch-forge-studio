@@ -85,15 +85,14 @@ function buildExpansionPrompt(args: { draft: string; min: number; target: number
   ].join("");
 }
 
-async function ensureBrief(args: {
-  supabase: ReturnType<typeof requireSupabaseAuth> extends never ? never : any;
-  projectId: string;
-  brief: ProductBrief | null;
-}): Promise<ProductBrief> {
-  if (args.brief && Array.isArray(args.brief.features) && args.brief.features.length > 0) {
-    return args.brief;
+async function ensureBrief(
+  projectId: string,
+  existing: ProductBrief | null,
+): Promise<ProductBrief> {
+  if (existing && Array.isArray(existing.features) && existing.features.length > 0) {
+    return existing;
   }
-  const { brief } = await researchProduct({ data: { projectId: args.projectId } });
+  const { brief } = await researchProduct({ data: { projectId } });
   return brief as ProductBrief;
 }
 
@@ -116,11 +115,10 @@ export const generateScript = createServerFn({ method: "POST" })
       .single();
     if (error || !project) throw new Error(error?.message ?? "Project not found");
 
-    const brief = await ensureBrief({
-      supabase,
-      projectId: project.id,
-      brief: (project.product_brief as ProductBrief | null) ?? null,
-    });
+    const brief = await ensureBrief(
+      project.id,
+      (project.product_brief as ProductBrief | null) ?? null,
+    );
 
     const language = project.target_languages?.[0] ?? "English";
     const target = targetWordCount(project.video_length_seconds);
