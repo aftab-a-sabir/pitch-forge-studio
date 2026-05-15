@@ -1,10 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { listProjects } from "@/lib/projects.functions";
+import { generateProjectVideo } from "@/lib/heygen.functions";
 import {
   Table,
   TableBody,
@@ -26,6 +28,9 @@ type StoredProject = {
   video_length_seconds: number;
   status: string;
   created_at: string;
+  heygen_session_id?: string | null;
+  heygen_video_id?: string | null;
+  heygen_last_error?: string | null;
 };
 
 function ProjectsPage() {
@@ -33,7 +38,33 @@ function ProjectsPage() {
   const [projects, setProjects] = useState<StoredProject[]>([]);
   const [email, setEmail] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const fetchProjects = useServerFn(listProjects);
+  const generateVideo = useServerFn(generateProjectVideo);
+
+  const reload = async () => {
+    try {
+      const res = await fetchProjects();
+      setProjects(res.projects as StoredProject[]);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleGenerate = async (projectId: string) => {
+    setBusyId(projectId);
+    try {
+      const res = await generateVideo({ data: { projectId } });
+      toast.success(`Video session started (${res.session_id.slice(0, 12)}…)`);
+      await reload();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to start video";
+      toast.error(msg);
+      await reload();
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   useEffect(() => {
     if (checking) return;
@@ -106,13 +137,15 @@ function ProjectsPage() {
                 <TableHead>Languages</TableHead>
                 <TableHead>Length</TableHead>
                 <TableHead>Status</TableHead>
+              <TableHead>HeyGen Video</TableHead>
                 <TableHead>Created</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {projects.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-12 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="py-12 text-center text-muted-foreground">
                     No projects yet. Create your first one.
                   </TableCell>
                 </TableRow>
@@ -128,7 +161,20 @@ function ProjectsPage() {
                     <TableCell>{p.target_languages.join(", ")}</TableCell>
                     <TableCell>{p.video_length_seconds}s</TableCell>
                     <TableCell>{p.status}</TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {p.heygen_video_id ? `${p.heygen_video_id.slice(0, 12)}…` : "—"}
+                  </TableCell>
                     <TableCell>{new Date(p.created_at).toLocaleDateString()}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busyId === p.id}
+                      onClick={() => handleGenerate(p.id)}
+                    >
+                      {busyId === p.id ? "Starting…" : "Generate video"}
+                    </Button>
+                  </TableCell>
                   </TableRow>
                 ))
               )}
