@@ -200,11 +200,18 @@ function NewProjectPage() {
       if (isEdit && editId) {
         await update({ data: { ...parsed.data, projectId: editId } });
         toast.success("Project updated");
+        navigate({ to: "/projects" });
       } else {
-        await create({ data: parsed.data });
+        const created = await create({ data: parsed.data });
         toast.success("Project created");
+        // Always route through the script preview step so the user can review
+        // (and edit) the generated script before kicking off the render.
+        navigate({
+          to: "/projects/$projectId/script",
+          params: { projectId: created.id },
+        });
+        return;
       }
-      navigate({ to: "/projects" });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : isEdit ? "Failed to update project" : "Failed to create project");
     } finally {
