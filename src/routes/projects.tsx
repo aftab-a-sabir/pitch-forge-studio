@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -34,7 +34,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Pencil, Trash2, Loader2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 
 export const Route = createFileRoute("/projects")({
   component: ProjectsPage,
@@ -71,8 +71,6 @@ function ProjectsPage() {
   const playedRef = useRef<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<StoredProject | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [navigatingId, setNavigatingId] = useState<string | null>(null);
-  const navigate = useNavigate();
 
   const reload = async () => {
     try {
@@ -272,28 +270,15 @@ function ProjectsPage() {
                         </Button>
                       ) : (
                         p.headshot_url ? (
-                          <Button
-                            size="sm"
-                            variant={navigatingId === p.id ? "default" : "secondary"}
-                            disabled={navigatingId === p.id}
-                            onClick={() => {
-                              setNavigatingId(p.id);
-                              navigate({
-                                to: "/projects/$projectId/script",
-                                params: { projectId: p.id },
-                              });
-                            }}
-                          >
-                            {navigatingId === p.id ? (
-                              <>
-                                <Loader2 className="animate-spin" />
-                                Opening script…
-                              </>
-                            ) : p.status === "error" ? (
-                              "Retry — review script"
-                            ) : (
-                              "Review script & render"
-                            )}
+                          <Button size="sm" variant="secondary" asChild>
+                            <Link
+                              to="/projects/$projectId/script"
+                              params={{ projectId: p.id }}
+                            >
+                              {p.status === "error"
+                                ? "Retry — review script"
+                                : "Review script & render"}
+                            </Link>
                           </Button>
                         ) : (
                           <Button
