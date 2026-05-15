@@ -12,6 +12,7 @@ const createProjectSchema = z.object({
   target_languages: z.array(z.enum(ALL_LANGUAGES)).min(1).max(ALL_LANGUAGES.length),
   video_length_seconds: z.number().int().min(15).max(120).default(45),
   headshot_url: z.string().url().max(2048).optional().nullable(),
+  voice_id: z.string().min(1).max(128).optional().nullable(),
 });
 
 const updateProjectSchema = createProjectSchema.extend({
@@ -35,6 +36,7 @@ export const createProject = createServerFn({ method: "POST" })
         target_languages: data.target_languages,
         video_length_seconds: data.video_length_seconds,
         headshot_url: data.headshot_url ?? null,
+        voice_id: data.voice_id ?? null,
       })
       .select("id")
       .single();
@@ -48,7 +50,7 @@ export const listProjects = createServerFn({ method: "GET" })
     const { supabase } = context;
     const { data, error } = await supabase
       .from("projects")
-      .select("id, product_url, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url, headshot_url")
+      .select("id, product_url, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url, headshot_url, voice_id")
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return { projects: data ?? [] };
@@ -61,7 +63,7 @@ export const getProject = createServerFn({ method: "POST" })
     const { supabase } = context;
     const { data: row, error } = await supabase
       .from("projects")
-      .select("id, product_url, product_summary, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url, headshot_url")
+      .select("id, product_url, product_summary, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url, headshot_url, voice_id")
       .eq("id", data.projectId)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -89,6 +91,7 @@ export const updateProject = createServerFn({ method: "POST" })
       target_languages: data.target_languages,
       video_length_seconds: data.video_length_seconds,
       headshot_url: data.headshot_url ?? null,
+      voice_id: data.voice_id ?? null,
     };
     const updates = existing.status === "error"
       ? {

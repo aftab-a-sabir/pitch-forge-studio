@@ -1,42 +1,48 @@
-## Goal
+# Fix HeyGen "Invalid voice_id" error
 
-Allow users to edit existing projects (especially after a generation error) and delete projects, with a safety warning when deleting one that has a successfully generated video.
+Replace the `REPLACE_ME_VOICE_ID` placeholder with a real voice picker so HeyGen accepts the request.
 
-## UX changes (`src/routes/projects.tsx`)
+## What we're building (Option 2 + Option 4)
 
-In the Actions column, add two icon buttons next to the existing Generate/Check/Play button on every row:
+- **Curated dropdown** of ~8 hand-picked HeyGen voices (label + gender + language).
+- **"Other / paste voice_id"** option that reveals a free-text input for power users.
+- **Per-project storage** so each project remembers its voice.
+- **Recovery for the failed project**: edit it, pick a voice, re-run generation.
 
-- **Edit** (pencil icon) — navigates to `/new?edit=<projectId>`. Available on every project regardless of status.
-- **Delete** (trash icon) — opens an `AlertDialog`:
-  - If `status === "ready"` (or `video_url` is set): warning text "This project has a generated video. Make sure you've downloaded it or no longer need it. This action cannot be undone."
-  - Otherwise: simpler "Delete this project? This action cannot be undone."
-  - Confirm button is destructive variant; cancel closes the dialog.
-  - On confirm → call `deleteProject`, toast result, reload list.
+## Steps
 
-No changes to the video player, table columns, or status logic.
+### 1. Voice catalog (`src/lib/heygen-config.ts`)
+Replace placeholders with a real catalog:
+```ts
+export const HEYGEN_VOICES = [
+  { id: "<real-id>", label: "English – Female (Rachel)", gender: "female", language: "English" },
+  { id: "<real-id>", label: "English – Male (Adam)",   gender: "male",   language: "English" },
+  // ~6 more covering the languages in ALL_LANGUAGES
+];
+export const DEFAULT_AVATAR_IV_VOICE_ID = HEYGEN_VOICES[0].id;
+```
+IDs sourced from HeyGen's public `/v2/voices` list.
 
-## Edit flow (`src/routes/new.tsx`)
+### 2. Database
+Migration: add nullable `voice_id text` column to `projects`.
 
-Reuse the existing New Project form for editing:
+### 3. Server functions (`src/lib/projects.functions.ts`)
+- Add `voice_id: z.string().min(1).max(128).nullable().optional()` to create + update schemas.
+- Persist on insert/update; include in `getProject` / `listProjects` selects.
 
-- Read `?edit=<projectId>` from the URL via `Route.useSearch()`.
-- If present, on mount call a new `getProject({ projectId })` server fn and prefill all form fields: `product_url`, `product_summary`, `target_persona`, `target_languages`, `video_length_seconds`, `headshot_url` (and select the appropriate headshot tab: URL / Upload / Demo / None based on the stored value — Upload tab shows the existing URL as a preview with an option to replace).
-- Page heading switches to "Edit Project" and submit button to "Save changes".
-- Submit calls `updateProject` instead of `createProject`. On success, navigate back to `/projects`.
-- If the project's `status` was `error`, after a successful save reset `status` to `pending`, clear `heygen_last_error`, `heygen_session_id`, `heygen_video_id`, and `video_url` so the user can re-trigger generation cleanly. Successful/processing projects keep their generation state — editing only updates the input fields.
+### 4. Generation (`src/lib/heygen.functions.ts`)
+- Select `voice_id` from the project row.
+- Pass `project.voice_id ?? DEFAULT_AVATAR_IV_VOICE_ID` to the `/v2/videos` payload.
 
-## Server changes (`src/lib/projects.functions.ts`)
+### 5. UI (`src/routes/new.tsx`)
+- New "Voice" `<Select>` populated from `HEYGEN_VOICES`, plus a final "Other — paste voice_id" option that reveals a text input.
+- Hydrate from existing project on edit.
+- Submit alongside other fields.
 
-Add three new server functions, all using `requireSupabaseAuth` (RLS already restricts to owner):
-
-1. **`getProject`** — input: `{ projectId: string }`. Selects the same columns as `listProjects` for a single row. Throws if not found.
-2. **`updateProject`** — input: same shape as `createProjectSchema` plus `projectId`. Updates the row. If the existing row's `status === "error"`, also reset the generation fields described above. Returns `{ id }`.
-3. **`deleteProject`** — input: `{ projectId: string }`. Deletes the row. Best-effort: also delete the headshot file from the `headshots` bucket if `headshot_url` points there (parse path, ignore failure). Returns `{ ok: true }`.
-
-No database migration needed — existing RLS policies cover update/delete for the owner.
+### 6. Verify
+- Edit the existing failed project, pick a voice, save → status resets to `pending`.
+- Trigger generation → confirm HeyGen accepts the call (check server logs).
 
 ## Out of scope
-
-- No bulk delete, no soft-delete/trash, no edit history.
-- No changes to HeyGen logic, video player, or the headshots bucket policies.
-- No edits to projects currently in `processing` status are blocked at the UI level (server allows it, but we don't add a special guard — the Edit button is always shown).
+- Live `/v2/voices` browser with search — can add later.
+- Auto-picking voice from `target_languages[0]` — manual for now.
