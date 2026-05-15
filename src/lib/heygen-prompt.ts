@@ -22,11 +22,15 @@ export function buildHeygenPrompt(input: HeygenPromptInput): string {
 
 // Roughly 2.5 spoken words per second.
 export function targetWordCount(seconds: number): number {
-  return Math.max(20, Math.min(300, Math.round(seconds * 2.5)));
+  // Avatar IV voices average ~2.7 spoken words per second. We aim slightly
+  // high so the rendered video lands at or just over the requested length.
+  return Math.max(25, Math.min(360, Math.round(seconds * 2.7)));
 }
 
 export function buildAvatarIVScriptPrompt(input: HeygenPromptInput): string {
-  const words = targetWordCount(input.video_length_seconds);
+  const target = targetWordCount(input.video_length_seconds);
+  const min = Math.round(target * 0.9);
+  const max = Math.round(target * 1.1);
   const contextParts: string[] = [];
   if (input.product_summary && input.product_summary.trim()) {
     contextParts.push(`Product summary (provided by the seller):\n${input.product_summary.trim()}`);
@@ -38,15 +42,35 @@ export function buildAvatarIVScriptPrompt(input: HeygenPromptInput): string {
     ? `\n\nProduct context — base every concrete claim on this material:\n\n${contextParts.join("\n\n")}\n`
     : "";
   return [
-    `Write a ${input.video_length_seconds}-second spoken sales video script (about ${words} words) `,
-    `for the SaaS product whose website is ${input.product_url}, addressed to a ${input.target_persona}, `,
-    `in ${input.language}. Friendly yet confident tone. Plain prose only — no stage directions, `,
-    `no speaker labels, no markdown, no quotes, no URLs. Never read the website address aloud. `,
-    `The presenter will read the script verbatim. `,
-    `Open with a hook tied to a real pain the ${input.target_persona} feels, cover 2-3 concrete benefits `,
-    `grounded in the product context below (do not invent features that are not supported by it), `,
-    `and end with a short, action-oriented call to action (e.g. "see how it works", "try it free"). `,
-    `If the product context is thin, stay generic and benefit-focused rather than fabricating specifics.`,
+    `You are writing a ${input.video_length_seconds}-second spoken sales video script in ${input.language}, `,
+    `addressed to a ${input.target_persona}. The on-screen presenter will read it verbatim.\n\n`,
+    `HARD LENGTH REQUIREMENT: write between ${min} and ${max} words (target ~${target}). `,
+    `Do not stop early. If you finish a draft shorter than ${min} words, keep going by deepening the benefits `,
+    `or sharpening the call to action — never pad with filler or repeat yourself.\n\n`,
+    `OUTPUT RULES: plain prose only. No stage directions, no speaker labels, no headings, `,
+    `no markdown, no quotation marks, no bullet points, no URLs. Never speak the website address aloud. `,
+    `Never invent product features that are not supported by the context below.\n\n`,
+    `STRUCTURE (4 beats, flow them together as natural prose, do not label them):\n`,
+    `1. Hook — open on a real pain the ${input.target_persona} feels day to day.\n`,
+    `2. Reveal — name the product and what it does in one clear sentence.\n`,
+    `3. Benefits — 2 to 3 concrete, specific benefits, each grounded in the product context.\n`,
+    `4. Call to action — one short, confident line (e.g. "see how it works today", "try it free this week").\n`,
+    `Tone: friendly, confident, energetic — like a senior product marketer pitching on stage.\n`,
+    `If the product context is thin, stay benefit-focused and generic rather than fabricating specifics.`,
     contextBlock,
+  ].join("");
+}
+
+export function buildAvatarIVExpansionPrompt(args: {
+  draft: string;
+  min_words: number;
+  target_words: number;
+}): string {
+  return [
+    `The script below is too short. Rewrite it so it has at least ${args.min_words} words `,
+    `(ideally ~${args.target_words}). Deepen the benefits and sharpen the call to action. `,
+    `Keep the same friendly, confident tone. Do not repeat sentences, do not pad with filler, `,
+    `do not add stage directions, headings, markdown, quotes, or URLs. Output the rewritten script only.\n\n`,
+    `Draft:\n${args.draft}`,
   ].join("");
 }

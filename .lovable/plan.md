@@ -1,38 +1,55 @@
-# Fix: Avatar IV script just spells out the URL
+# Fix: Avatar IV video too short and lower quality than Video Agents
 
 ## Root cause
 
-`generateAvatarIVScript` in `src/lib/heygen.functions.ts` passes only the raw URL to the LLM via `buildAvatarIVScriptPrompt`. The model has no way to know what's at that URL, so it falls back to literally reading the URL aloud. We also already capture an optional `product_summary` field on the project but never feed it into the prompt.
+Two HeyGen endpoints, two very different behaviors:
+
+| Path | Endpoint | Script source | Duration driven by |
+|---|---|---|---|
+| No photo | `/v3/video-agents` | HeyGen writes it internally from our prompt | HeyGen targets `video_length_seconds` itself |
+| Photo + voice | `/v2/videos` (Avatar IV) | **Our LLM script, read verbatim** | **Length of our script × voice cadence** |
+
+Today the Avatar IV script:
+- Uses `google/gemini-2.5-flash` (fastest/cheapest, weakest at long-form copy).
+- Targets `seconds × 2.5` words with no floor and no retry — Gemini Flash routinely returns ~half that.
+- Has no length verification, so a 60s project can ship a ~25s video.
+
+Video Agents looks "higher quality" mostly because (a) its script is longer and better-written, and (b) HeyGen's stock avatar pipeline is more polished than Avatar IV. We can't fix (b) — that's HeyGen — but (a) is fully in our control.
 
 ## What to change
 
-### 1. Use `product_summary` in the prompt
-- Select `product_summary` in the project query inside `generateProjectVideo` (Avatar IV branch).
-- Pass it through to `generateAvatarIVScript`.
+All changes in `src/lib/heygen.functions.ts` and `src/lib/heygen-prompt.ts`. No DB or UI changes.
 
-### 2. Fetch lightweight page context when summary is missing or thin
-- Add `fetchProductContext(url)` helper in `src/lib/heygen.functions.ts` (server-only).
-- `fetch(url)` with a 5s `AbortSignal.timeout`, `User-Agent` header, only accept `text/html`, cap body at ~200 KB.
-- Regex-extract: `<title>`, `<meta name="description">`, `<meta property="og:title">`, `<meta property="og:description">`, first `<h1>`, first 2 `<h2>`. Strip tags, collapse whitespace, truncate to ~1500 chars total.
-- Wrap in try/catch — failures return `null` and we degrade gracefully (still better than today's URL-only behavior).
+### 1. Upgrade the script model
+- Switch `generateAvatarIVScript` from `google/gemini-2.5-flash` to `openai/gpt-5-mini` (much stronger long-form copy, still fast/cheap). Keep Gemini Flash as a fallback only if gpt-5-mini errors.
 
-### 3. Update `buildAvatarIVScriptPrompt` (`src/lib/heygen-prompt.ts`)
-- Add optional `product_summary?: string` and `page_context?: string` fields to `HeygenPromptInput`.
-- When either is present, include a "Product context:" block in the prompt and instruct the model to base concrete benefits on that context — never to read the URL aloud, never to invent unverified claims.
-- Keep the existing length / persona / language guidance.
+### 2. Make length a hard target, not a hint
+- Bump cadence assumption from 2.5 → **2.7 wps** (Avatar IV voices are slightly faster than the old default).
+- Compute `targetWords` and a `minWords = Math.round(targetWords * 0.9)`.
+- Pass both into the prompt: explicit "Write **between {min} and {target+10%} words**. Do not stop early."
+- After generation, count words. If `< minWords`, run **one expansion pass**: send the draft back with "Expand to at least {minWords} words by deepening the benefits and call to action. Keep the same tone, no filler, no repetition." If still short after retry, accept it (don't loop).
 
-### 4. Update fallback script (`buildFallbackAvatarIVScript`)
-- Prefer the first 1–2 sentences of `product_summary` (or scraped description) over the bare URL when constructing the fallback.
+### 3. Strengthen the prompt itself
+- Tighten `buildAvatarIVScriptPrompt` to a clear 4-beat structure: (1) hook tied to the persona's pain, (2) what the product is, (3) 2–3 concrete benefits grounded in `product_summary` / `page_context`, (4) one-line CTA.
+- Reiterate the no-URL / no-stage-directions rules at the top, where models actually obey them.
+- Emit the word budget explicitly inside the prompt body (LLMs hit length targets much more reliably when the number appears inline).
 
-### 5. No DB / UI changes required
-- `product_summary` is already captured in `src/routes/new.tsx`. We may add a one-line hint under the textarea ("Used to write your video script — the more specific, the better.") to nudge users to fill it in. Optional.
+### 4. Avatar IV render settings
+- Bump `expressiveness` from `"medium"` to `"high"` for more dynamic delivery.
+- Keep `1080p` / `16:9`.
+
+### 5. Logging
+- After generation, `console.log("heygen.script", { project_id, words, target: targetWords, retried })` so we can verify in production whether the length floor is being hit.
 
 ## Out of scope
-- Full HTML→Markdown extraction or headless browser scraping.
-- Caching scraped context on the project row (can add later if latency becomes an issue).
-- Re-running script generation for already-failed/old projects automatically — user can edit + regenerate.
+
+- Switching the no-photo path away from Video Agents.
+- Caching scraped page context on the project row.
+- Letting the user preview/edit the generated script before render (worth doing later, not now).
 
 ## Verification
-- Edit an existing project, ensure summary is filled (or rely on scrape), regenerate.
-- Check server logs: `heygen.avatar_iv` log line; confirm no errors.
-- Confirm new HeyGen video script reads as a real sales pitch, not the URL.
+
+1. Regenerate the same project that produced the bad video.
+2. Check server logs: `heygen.script` line should show `words` within ~10% of `target` (e.g. 60s → ~155–180 words).
+3. Confirm rendered video duration is close to the requested `video_length_seconds`.
+4. Confirm the spoken content is a proper sales pitch (hook → benefits → CTA), not a recited URL or a 15-second blurb.
