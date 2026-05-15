@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 import {
   Table,
   TableBody,
@@ -24,11 +25,16 @@ type StoredProject = {
 };
 
 function ProjectsPage() {
+  const checking = useRequireAuth();
   const [projects, setProjects] = useState<StoredProject[]>([]);
 
   useEffect(() => {
     setProjects(JSON.parse(localStorage.getItem("pitchforge_projects") || "[]"));
   }, []);
+
+  if (checking) {
+    return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>;
+  }
 
   return (
     <div className="min-h-screen bg-background">
