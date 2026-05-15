@@ -1,55 +1,68 @@
-# Fix: Avatar IV video too short and lower quality than Video Agents
+# Fix Avatar IV scripts: real context, editable preview
 
-## Root cause
+## The actual problem
 
-Two HeyGen endpoints, two very different behaviors:
+The photo+voice path produces nonsense not because of the model or word count, but because we ask an LLM to write a sales script with almost no knowledge of the product. `product_summary` is often empty, the URL scrape is thin, and the script is rendered verbatim by HeyGen Avatar IV with no chance to review.
 
-| Path | Endpoint | Script source | Duration driven by |
-|---|---|---|---|
-| No photo | `/v3/video-agents` | HeyGen writes it internally from our prompt | HeyGen targets `video_length_seconds` itself |
-| Photo + voice | `/v2/videos` (Avatar IV) | **Our LLM script, read verbatim** | **Length of our script × voice cadence** |
+The no-photo path works because HeyGen Video Agents does its own internal research from the URL — we never see that script. We will leave that path alone.
 
-Today the Avatar IV script:
-- Uses `google/gemini-2.5-flash` (fastest/cheapest, weakest at long-form copy).
-- Targets `seconds × 2.5` words with no floor and no retry — Gemini Flash routinely returns ~half that.
-- Has no length verification, so a 60s project can ship a ~25s video.
+## What changes
 
-Video Agents looks "higher quality" mostly because (a) its script is longer and better-written, and (b) HeyGen's stock avatar pipeline is more polished than Avatar IV. We can't fix (b) — that's HeyGen — but (a) is fully in our control.
+### 1. Real product research (server)
+- New server fn `researchProduct({ url })`:
+  - `fetch(url)` with a normal User-Agent.
+  - Extract readable text (strip tags/scripts/styles, collapse whitespace, cap ~15k chars).
+  - Pull `<title>`, `<meta name="description">`, `<meta property="og:*">`.
+  - LLM pass (gpt-5-mini, tool-call structured output) → `{ name, value_prop, audience, features[3-5], tone }`.
+- Persist as `product_brief` (jsonb) on `projects`. Cache: regenerate only if URL changes or user clicks "re-research".
+- If the page returns <500 chars of readable text, surface a clear "couldn't read this page — paste a short description" fallback in the UI (text area on the New Project form).
 
-## What to change
+### 2. One canonical script per project
+- New server fn `generateScript({ project_id })` that:
+  - Loads `product_brief` + `target_persona` + `target_languages` + `video_length_seconds`.
+  - Builds a 4-beat prompt (hook → product reveal → 2-3 benefits grounded in `features[]` → CTA), with explicit min/max word budget at ~2.7 wps.
+  - Uses gpt-5-mini.
+  - One expansion retry if under min words.
+- Stores result on a new `script` (text) column with `script_updated_at`.
+- Logs `{ project_id, words, target, retried }`.
 
-All changes in `src/lib/heygen.functions.ts` and `src/lib/heygen-prompt.ts`. No DB or UI changes.
+### 3. Editable preview before render
+- After project create, route to a new `/projects/$id/script` step that shows the generated script in a textarea with:
+  - "Regenerate" (calls `generateScript` again).
+  - "Looks good — render video" (kicks off the existing render).
+- Word count + estimated duration shown live.
+- The render handlers read `projects.script` instead of generating on the fly.
 
-### 1. Upgrade the script model
-- Switch `generateAvatarIVScript` from `google/gemini-2.5-flash` to `openai/gpt-5-mini` (much stronger long-form copy, still fast/cheap). Keep Gemini Flash as a fallback only if gpt-5-mini errors.
+### 4. Render path wiring
+- **Photo + voice (Avatar IV):** send `projects.script` verbatim. Remove the inline `generateAvatarIVScript` call from the render path.
+- **No photo (Video Agents):** unchanged — keeps using the URL-driven prompt as today (per your decision).
 
-### 2. Make length a hard target, not a hint
-- Bump cadence assumption from 2.5 → **2.7 wps** (Avatar IV voices are slightly faster than the old default).
-- Compute `targetWords` and a `minWords = Math.round(targetWords * 0.9)`.
-- Pass both into the prompt: explicit "Write **between {min} and {target+10%} words**. Do not stop early."
-- After generation, count words. If `< minWords`, run **one expansion pass**: send the draft back with "Expand to at least {minWords} words by deepening the benefits and call to action. Keep the same tone, no filler, no repetition." If still short after retry, accept it (don't loop).
+### 5. Cleanup
+- Delete the now-unused expansion logic inside `heygen.functions.ts` render path (moved into `generateScript`).
+- Keep the `heygen.script` log line in the new generator for verification.
 
-### 3. Strengthen the prompt itself
-- Tighten `buildAvatarIVScriptPrompt` to a clear 4-beat structure: (1) hook tied to the persona's pain, (2) what the product is, (3) 2–3 concrete benefits grounded in `product_summary` / `page_context`, (4) one-line CTA.
-- Reiterate the no-URL / no-stage-directions rules at the top, where models actually obey them.
-- Emit the word budget explicitly inside the prompt body (LLMs hit length targets much more reliably when the number appears inline).
+## Files touched
 
-### 4. Avatar IV render settings
-- Bump `expressiveness` from `"medium"` to `"high"` for more dynamic delivery.
-- Keep `1080p` / `16:9`.
-
-### 5. Logging
-- After generation, `console.log("heygen.script", { project_id, words, target: targetWords, retried })` so we can verify in production whether the length floor is being hit.
+- `supabase/migrations/<new>.sql` — add `product_brief jsonb`, `script text`, `script_updated_at timestamptz` to `projects`.
+- `src/lib/research.functions.ts` — new: `researchProduct`.
+- `src/lib/script.functions.ts` — new: `generateScript`.
+- `src/lib/heygen.functions.ts` — read `projects.script` for Avatar IV render; drop inline script generation; no-photo path unchanged.
+- `src/lib/heygen-prompt.ts` — keep helpers, move 4-beat prompt builder here, remove unused expansion variants if any.
+- `src/routes/new.tsx` — after submit, route to script step instead of straight to render. Add optional "product description" textarea fallback.
+- `src/routes/projects.$id.script.tsx` — new: editable preview + regenerate + confirm-render.
+- `src/integrations/supabase/types.ts` — auto-regenerated by migration.
 
 ## Out of scope
 
-- Switching the no-photo path away from Video Agents.
-- Caching scraped page context on the project row.
-- Letting the user preview/edit the generated script before render (worth doing later, not now).
+- Switching the no-photo path to use our script.
+- Headless-browser scraping for JS-rendered sites (we'll use simple fetch + readability; user can paste a description if scrape is empty).
+- Multi-language script translation polish (existing behavior preserved).
+- Voice/avatar selection changes.
 
 ## Verification
 
-1. Regenerate the same project that produced the bad video.
-2. Check server logs: `heygen.script` line should show `words` within ~10% of `target` (e.g. 60s → ~155–180 words).
-3. Confirm rendered video duration is close to the requested `video_length_seconds`.
-4. Confirm the spoken content is a proper sales pitch (hook → benefits → CTA), not a recited URL or a 15-second blurb.
+1. Create a project for a known SaaS URL → confirm `product_brief` populates with real features.
+2. Script preview shows a coherent 4-beat script in target word range.
+3. Edit script → click render → rendered video speaks the edited text verbatim.
+4. Server logs show `heygen.script { words, target, retried }` within ~10% of target.
+5. No-photo flow still produces the same quality video as before (regression check).
