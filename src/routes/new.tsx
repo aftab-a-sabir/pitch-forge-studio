@@ -295,34 +295,6 @@ function NewProjectPage() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="voice_id">Voice</Label>
-            <Select value={voiceChoice} onValueChange={setVoiceChoice} disabled={readOnly}>
-              <SelectTrigger id="voice_id">
-                <SelectValue placeholder="Select a voice" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__default__">Default (English – Female)</SelectItem>
-                {HEYGEN_VOICES.map((v) => (
-                  <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
-                ))}
-                <SelectItem value="__custom__">Other — paste voice_id</SelectItem>
-              </SelectContent>
-            </Select>
-            {voiceChoice === "__custom__" && (
-              <Input
-                placeholder="HeyGen voice_id (from /v2/voices)"
-                value={customVoiceId}
-                onChange={(e) => setCustomVoiceId(e.target.value)}
-                disabled={readOnly}
-              />
-            )}
-            <p className="text-xs text-muted-foreground">
-              Used when a presenter headshot is provided (Avatar IV).
-            </p>
-            {errors.voice_id && <p className="text-sm text-destructive">{errors.voice_id}</p>}
-          </div>
-
-          <div className="space-y-2">
             <Label htmlFor="video_length_seconds">Video length (seconds)</Label>
             <Input
               id="video_length_seconds"
@@ -337,56 +309,46 @@ function NewProjectPage() {
             {errors.video_length_seconds && <p className="text-sm text-destructive">{errors.video_length_seconds}</p>}
           </div>
 
-          <div className="space-y-2">
-            <Label>Presenter headshot (optional)</Label>
-            <p className="text-xs text-muted-foreground">
-              When provided, the video uses HeyGen Avatar IV with this photo instead of a default avatar.
-            </p>
-            <Tabs
-              value={headshotTab}
-              onValueChange={readOnly ? undefined : onTabChange}
-              className="w-full"
-            >
-              <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="none" disabled={readOnly}>None</TabsTrigger>
-                <TabsTrigger value="url" disabled={readOnly}>URL</TabsTrigger>
-                <TabsTrigger value="upload" disabled={readOnly}>Upload</TabsTrigger>
-                <TabsTrigger value="demo" disabled={readOnly}>Demo</TabsTrigger>
-              </TabsList>
-              <TabsContent value="none">
-                <p className="text-xs text-muted-foreground py-2">No headshot — use HeyGen's default avatar.</p>
-              </TabsContent>
-              <TabsContent value="url" className="space-y-2">
-                <Input
-                  type="url"
-                  placeholder="https://example.com/headshot.jpg"
-                  value={headshotUrlInput}
-                  onChange={(e) => {
-                    setHeadshotUrlInput(e.target.value);
-                    setHeadshotPreview(e.target.value || null);
-                  }}
-                  disabled={readOnly}
-                />
-              </TabsContent>
-              <TabsContent value="upload" className="space-y-2">
-                <Input type="file" accept="image/png,image/jpeg" onChange={onFileChange} disabled={readOnly} />
-                <p className="text-xs text-muted-foreground">PNG or JPEG, up to 5MB.</p>
-              </TabsContent>
-              <TabsContent value="demo">
-                <p className="text-xs text-muted-foreground py-2">Use the bundled demo headshot.</p>
-              </TabsContent>
-            </Tabs>
-            {headshotPreview && (
-              <img
-                src={headshotPreview}
-                alt="Headshot preview"
-                className="mt-2 h-24 w-24 rounded-md object-cover border"
-                onError={() => {
-                  // ignore broken url previews
-                }}
-              />
-            )}
-            {errors.headshot_url && <p className="text-sm text-destructive">{errors.headshot_url}</p>}
+          <div className="rounded-lg border border-dashed bg-muted/40 p-4 space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-muted-foreground">Advanced options</h3>
+              <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                Coming soon
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="voice_id">Voice</Label>
+              <Select value={voiceChoice} onValueChange={setVoiceChoice} disabled>
+                <SelectTrigger id="voice_id">
+                  <SelectValue placeholder="Default (English – Female)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">Default (English – Female)</SelectItem>
+                  {HEYGEN_VOICES.map((v) => (
+                    <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Coming soon — the default voice will be used.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Presenter headshot</Label>
+              <Tabs value={headshotTab} onValueChange={undefined} className="w-full">
+                <TabsList className="grid w-full grid-cols-4">
+                  <TabsTrigger value="none" disabled>None</TabsTrigger>
+                  <TabsTrigger value="url" disabled>URL</TabsTrigger>
+                  <TabsTrigger value="upload" disabled>Upload</TabsTrigger>
+                  <TabsTrigger value="demo" disabled>Demo</TabsTrigger>
+                </TabsList>
+              </Tabs>
+              <p className="text-xs text-muted-foreground">
+                Coming soon — the default avatar will be used.
+              </p>
+            </div>
           </div>
 
           <div className="flex gap-3">
