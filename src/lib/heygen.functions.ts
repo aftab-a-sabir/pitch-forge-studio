@@ -43,9 +43,10 @@ async function generateAvatarIVScript(input: {
   product_url: string;
   target_persona: string;
   language: string;
+  lovableApiKey: string | undefined;
 }): Promise<string> {
-  const apiKey = process.env.LOVABLE_API_KEY;
-  if (!apiKey) throw new Error("LOVABLE_API_KEY is not configured");
+  const apiKey = input.lovableApiKey;
+  if (!apiKey) return buildFallbackAvatarIVScript(input);
   const prompt = buildAvatarIVScriptPrompt(input);
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
@@ -69,6 +70,18 @@ async function generateAvatarIVScript(input: {
   const content = json.choices?.[0]?.message?.content?.trim();
   if (!content) throw new Error("Script generation returned empty content");
   return content;
+}
+
+function buildFallbackAvatarIVScript(input: {
+  product_url: string;
+  target_persona: string;
+  language: string;
+}): string {
+  return [
+    `If you are a ${input.target_persona}, you need clear answers before you commit to another tool.`,
+    `${input.product_url} is built to help your team move faster, communicate value clearly, and turn interest into action without adding extra complexity.`,
+    `Take a closer look today and see how it can support your next priority.`,
+  ].join(" ");
 }
 
 async function callHeygen<T>(path: string, init: RequestInit): Promise<T> {
@@ -125,6 +138,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { supabase } = context;
+    const lovableApiKey = process.env.LOVABLE_API_KEY;
     const { data: project, error } = await supabase
       .from("projects")
       .select("id, product_url, target_persona, target_languages, video_length_seconds, headshot_url")
@@ -142,6 +156,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
           product_url: project.product_url,
           target_persona: project.target_persona,
           language,
+          lovableApiKey,
         });
         const json = await callHeygen<HeygenV2VideoCreateResponse>("/v2/videos", {
           method: "POST",
