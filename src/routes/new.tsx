@@ -161,6 +161,7 @@ function NewProjectPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (readOnly) return;
     setErrors({});
     let headshotUrl: string | null = null;
     try {
