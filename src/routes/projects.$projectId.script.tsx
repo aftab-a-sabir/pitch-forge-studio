@@ -61,9 +61,15 @@ function ScriptPreviewPage() {
         setGenerating(true);
         try {
           const res = await regenerate({ data: { projectId } });
-          if (!cancelled) setScript(res.script);
+          if (!cancelled) {
+            setScript(res.script);
+            setJustUpdated(true);
+            setTimeout(() => setJustUpdated(false), 1200);
+          }
         } catch (e) {
-          toast.error(e instanceof Error ? e.message : "Failed to generate script");
+          const msg = e instanceof Error ? e.message : "Failed to generate script";
+          if (!cancelled) setLoadError(msg);
+          toast.error(msg);
         } finally {
           if (!cancelled) setGenerating(false);
         }
