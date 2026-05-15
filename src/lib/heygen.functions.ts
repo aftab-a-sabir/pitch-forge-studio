@@ -1,12 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import {
-  buildHeygenPrompt,
-  buildAvatarIVScriptPrompt,
-  buildAvatarIVExpansionPrompt,
-  targetWordCount,
-} from "./heygen-prompt";
+import { buildHeygenPrompt } from "./heygen-prompt";
+import { generateScript } from "./script.functions";
 import { DEFAULT_AVATAR_IV_VOICE_ID } from "./heygen-config";
 
 type HeygenVideoDetail = {
@@ -42,211 +38,6 @@ type HeygenV2VideoStatus = {
     error?: { message?: string } | null;
   };
 };
-
-function countWords(s: string): number {
-  return s.trim().split(/\s+/).filter(Boolean).length;
-}
-
-async function callLovableAI(args: {
-  apiKey: string;
-  model: string;
-  system: string;
-  user: string;
-}): Promise<string> {
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${args.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: args.model,
-      messages: [
-        { role: "system", content: args.system },
-        { role: "user", content: args.user },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`AI gateway failed (${res.status}): ${body.slice(0, 300)}`);
-  }
-  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = json.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error("AI gateway returned empty content");
-  return content;
-}
-
-async function generateAvatarIVScript(input: {
-  video_length_seconds: number;
-  product_url: string;
-  target_persona: string;
-  language: string;
-  product_summary?: string | null;
-  page_context?: string | null;
-  lovableApiKey: string | undefined;
-  project_id?: string;
-}): Promise<string> {
-  const apiKey = input.lovableApiKey;
-  if (!apiKey) return buildFallbackAvatarIVScript(input);
-  const prompt = buildAvatarIVScriptPrompt(input);
-  const target = targetWordCount(input.video_length_seconds);
-  const minWords = Math.round(target * 0.9);
-  const system =
-    "You are a senior product marketer writing spoken sales scripts that on-screen avatars read verbatim. " +
-    "Output plain text only. Hit the requested word count.";
-
-  const primaryModel = "openai/gpt-5-mini";
-  const fallbackModel = "google/gemini-2.5-flash";
-
-  let draft: string;
-  let modelUsed = primaryModel;
-  try {
-    draft = await callLovableAI({ apiKey, model: primaryModel, system, user: prompt });
-  } catch (e) {
-    console.warn("heygen.script.primary_failed", e instanceof Error ? e.message : e);
-    modelUsed = fallbackModel;
-    draft = await callLovableAI({ apiKey, model: fallbackModel, system, user: prompt });
-  }
-
-  let words = countWords(draft);
-  let retried = false;
-  if (words < minWords) {
-    retried = true;
-    try {
-      const expanded = await callLovableAI({
-        apiKey,
-        model: modelUsed,
-        system,
-        user: buildAvatarIVExpansionPrompt({
-          draft,
-          min_words: minWords,
-          target_words: target,
-        }),
-      });
-      const expandedWords = countWords(expanded);
-      // Only accept the expansion if it actually grew the script.
-      if (expandedWords > words) {
-        draft = expanded;
-        words = expandedWords;
-      }
-    } catch (e) {
-      console.warn("heygen.script.expand_failed", e instanceof Error ? e.message : e);
-    }
-  }
-
-  console.log("heygen.script", {
-    project_id: input.project_id,
-    model: modelUsed,
-    target_words: target,
-    min_words: minWords,
-    words,
-    retried,
-  });
-  return draft;
-}
-
-function buildFallbackAvatarIVScript(input: {
-  product_url: string;
-  target_persona: string;
-  language: string;
-  product_summary?: string | null;
-  page_context?: string | null;
-}): string {
-  const blurb = (input.product_summary ?? input.page_context ?? "").trim();
-  if (blurb) {
-    const firstSentences = blurb
-      .split(/(?<=[.!?])\s+/)
-      .slice(0, 2)
-      .join(" ");
-    return [
-      `If you are a ${input.target_persona}, here is something worth a closer look.`,
-      firstSentences,
-      `Take a look today and see how it can support your next priority.`,
-    ].join(" ");
-  }
-  return [
-    `If you are a ${input.target_persona}, you need clear answers before you commit to another tool.`,
-    `${input.product_url} is built to help your team move faster, communicate value clearly, and turn interest into action without adding extra complexity.`,
-    `Take a closer look today and see how it can support your next priority.`,
-  ].join(" ");
-}
-
-async function fetchProductContext(url: string): Promise<string | null> {
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: AbortSignal.timeout(5000),
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; LovableScriptBot/1.0)",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-    if (!res.ok) return null;
-    const ctype = res.headers.get("content-type") ?? "";
-    if (!ctype.includes("text/html") && !ctype.includes("xml")) return null;
-    let html = await res.text();
-    if (html.length > 200_000) html = html.slice(0, 200_000);
-
-    const pickAttr = (re: RegExp): string | null => {
-      const m = html.match(re);
-      return m?.[1] ? decodeEntities(m[1].trim()) : null;
-    };
-    const pickTag = (re: RegExp): string | null => {
-      const m = html.match(re);
-      if (!m?.[1]) return null;
-      return decodeEntities(stripTags(m[1])).replace(/\s+/g, " ").trim();
-    };
-
-    const title = pickTag(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    const metaDesc = pickAttr(
-      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i,
-    );
-    const ogTitle = pickAttr(
-      /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,
-    );
-    const ogDesc = pickAttr(
-      /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,
-    );
-    const h1 = pickTag(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-    const h2Matches = [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/gi)]
-      .slice(0, 3)
-      .map((m) => decodeEntities(stripTags(m[1])).replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-
-    const lines: string[] = [];
-    if (title) lines.push(`Title: ${title}`);
-    if (ogTitle && ogTitle !== title) lines.push(`OG title: ${ogTitle}`);
-    if (metaDesc) lines.push(`Description: ${metaDesc}`);
-    if (ogDesc && ogDesc !== metaDesc) lines.push(`OG description: ${ogDesc}`);
-    if (h1) lines.push(`H1: ${h1}`);
-    if (h2Matches.length) lines.push(`H2: ${h2Matches.join(" | ")}`);
-
-    if (!lines.length) return null;
-    let out = lines.join("\n");
-    if (out.length > 1500) out = out.slice(0, 1500);
-    return out;
-  } catch (e) {
-    console.warn("fetchProductContext failed", e instanceof Error ? e.message : e);
-    return null;
-  }
-}
-
-function stripTags(s: string): string {
-  return s.replace(/<[^>]*>/g, "");
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
-}
 
 async function callHeygen<T>(path: string, init: RequestInit): Promise<T> {
   const apiKey = process.env.HEYGEN_API_KEY;
@@ -300,11 +91,10 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => z.object({ projectId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const lovableApiKey = process.env.LOVABLE_API_KEY;
     const { data: project, error } = await supabase
       .from("projects")
       .select(
-        "id, product_url, product_summary, target_persona, target_languages, video_length_seconds, headshot_url, voice_id",
+        "id, product_url, product_summary, target_persona, target_languages, video_length_seconds, headshot_url, voice_id, script",
       )
       .eq("id", data.projectId)
       .single();
@@ -315,19 +105,12 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
     try {
       // Avatar IV (image-to-video) path when a headshot is provided.
       if (project.headshot_url) {
-        const summary = project.product_summary?.trim() || null;
-        // Always try to scrape — cheap insurance, even if a summary exists.
-        const pageContext = await fetchProductContext(project.product_url);
-        const script = await generateAvatarIVScript({
-          video_length_seconds: project.video_length_seconds,
-          product_url: project.product_url,
-          target_persona: project.target_persona,
-          language,
-          product_summary: summary,
-          page_context: pageContext,
-          lovableApiKey,
-          project_id: project.id,
-        });
+        let script = project.script?.trim() || "";
+        if (!script) {
+          // Backward compatibility: if no stored script (e.g. an older project), generate one now.
+          const result = await generateScript({ data: { projectId: project.id } });
+          script = result.script;
+        }
         const json = await callHeygen<HeygenV2VideoCreateResponse>("/v2/videos", {
           method: "POST",
           body: JSON.stringify({

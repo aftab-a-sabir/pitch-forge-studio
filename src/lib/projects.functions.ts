@@ -63,7 +63,7 @@ export const getProject = createServerFn({ method: "POST" })
     const { supabase } = context;
     const { data: row, error } = await supabase
       .from("projects")
-      .select("id, product_url, product_summary, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url, headshot_url, voice_id")
+      .select("id, product_url, product_summary, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url, headshot_url, voice_id, script, script_updated_at, product_brief")
       .eq("id", data.projectId)
       .maybeSingle();
     if (error) throw new Error(error.message);
