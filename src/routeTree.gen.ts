@@ -14,7 +14,7 @@ import { Route as NewRouteImport } from './routes/new'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DevHeygenTestRouteImport } from './routes/dev.heygen-test'
-import { Route as ProjectsProjectIdScriptRouteImport } from './routes/projects.$projectId.script'
+import { Route as ProjectsProjectIdScriptRouteImport } from './routes/projects_.$projectId.script'
 
 const ProjectsRoute = ProjectsRouteImport.update({
   id: '/projects',
@@ -42,16 +42,16 @@ const DevHeygenTestRoute = DevHeygenTestRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsProjectIdScriptRoute = ProjectsProjectIdScriptRouteImport.update({
-  id: '/$projectId/script',
-  path: '/$projectId/script',
-  getParentRoute: () => ProjectsRoute,
+  id: '/projects_/$projectId/script',
+  path: '/projects/$projectId/script',
+  getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/new': typeof NewRoute
-  '/projects': typeof ProjectsRouteWithChildren
+  '/projects': typeof ProjectsRoute
   '/dev/heygen-test': typeof DevHeygenTestRoute
   '/projects/$projectId/script': typeof ProjectsProjectIdScriptRoute
 }
@@ -59,7 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/new': typeof NewRoute
-  '/projects': typeof ProjectsRouteWithChildren
+  '/projects': typeof ProjectsRoute
   '/dev/heygen-test': typeof DevHeygenTestRoute
   '/projects/$projectId/script': typeof ProjectsProjectIdScriptRoute
 }
@@ -68,9 +68,9 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/new': typeof NewRoute
-  '/projects': typeof ProjectsRouteWithChildren
+  '/projects': typeof ProjectsRoute
   '/dev/heygen-test': typeof DevHeygenTestRoute
-  '/projects/$projectId/script': typeof ProjectsProjectIdScriptRoute
+  '/projects_/$projectId/script': typeof ProjectsProjectIdScriptRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -96,15 +96,16 @@ export interface FileRouteTypes {
     | '/new'
     | '/projects'
     | '/dev/heygen-test'
-    | '/projects/$projectId/script'
+    | '/projects_/$projectId/script'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRoute
   NewRoute: typeof NewRoute
-  ProjectsRoute: typeof ProjectsRouteWithChildren
+  ProjectsRoute: typeof ProjectsRoute
   DevHeygenTestRoute: typeof DevHeygenTestRoute
+  ProjectsProjectIdScriptRoute: typeof ProjectsProjectIdScriptRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -144,35 +145,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DevHeygenTestRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$projectId/script': {
-      id: '/projects/$projectId/script'
-      path: '/$projectId/script'
+    '/projects_/$projectId/script': {
+      id: '/projects_/$projectId/script'
+      path: '/projects/$projectId/script'
       fullPath: '/projects/$projectId/script'
       preLoaderRoute: typeof ProjectsProjectIdScriptRouteImport
-      parentRoute: typeof ProjectsRoute
+      parentRoute: typeof rootRouteImport
     }
   }
 }
-
-interface ProjectsRouteChildren {
-  ProjectsProjectIdScriptRoute: typeof ProjectsProjectIdScriptRoute
-}
-
-const ProjectsRouteChildren: ProjectsRouteChildren = {
-  ProjectsProjectIdScriptRoute: ProjectsProjectIdScriptRoute,
-}
-
-const ProjectsRouteWithChildren = ProjectsRoute._addFileChildren(
-  ProjectsRouteChildren,
-)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRoute,
   NewRoute: NewRoute,
-  ProjectsRoute: ProjectsRouteWithChildren,
+  ProjectsRoute: ProjectsRoute,
   DevHeygenTestRoute: DevHeygenTestRoute,
+  ProjectsProjectIdScriptRoute: ProjectsProjectIdScriptRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
