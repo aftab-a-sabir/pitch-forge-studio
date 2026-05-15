@@ -269,8 +269,18 @@ function ProjectsPage() {
           </DialogHeader>
           {playing?.video_url ? (
             <div
-              className="mx-auto max-h-[80vh] max-w-[90vw]"
-              style={{ aspectRatio: aspect ?? 16 / 9 }}
+              className="mx-auto"
+              style={
+                aspect && aspect < 1
+                  ? {
+                      aspectRatio: aspect,
+                      height: "min(80vh, calc(90vw * " + aspect + "))",
+                    }
+                  : {
+                      aspectRatio: "16 / 9",
+                      width: "min(90vw, calc(80vh * 16 / 9), 72rem)",
+                    }
+              }
             >
               <video
                 src={playing.video_url}
