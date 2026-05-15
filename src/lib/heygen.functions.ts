@@ -123,7 +123,7 @@ export const listHeygenSessionVideos = createServerFn({ method: "POST" })
     z.object({ sessionId: z.string().min(1) }).parse(input),
   )
   .handler(async ({ data }) => {
-    const json = await callHeygen<{ data: unknown[]; has_more?: boolean; next_token?: string | null }>(
+    const json = await callHeygen<{ data: Record<string, unknown>[]; has_more?: boolean; next_token?: string | null }>(
       `/v3/video-agents/${encodeURIComponent(data.sessionId)}/videos`,
       { method: "GET" },
     );
