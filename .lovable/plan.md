@@ -1,68 +1,42 @@
-# Headshot upload/URL + HeyGen Avatar IV workflow
-
 ## Goal
 
-On the New Project form, let the user provide a presenter headshot in any of three ways: paste a public image URL, upload a file from the device, or use a bundled demo headshot. When a project has a headshot, the backend uses HeyGen's **Avatar IV** image-to-video endpoint (`POST /v2/videos` with `image_url`) instead of the default Video Agents flow.
+Allow users to edit existing projects (especially after a generation error) and delete projects, with a safety warning when deleting one that has a successfully generated video.
 
-## UX changes (`src/routes/new.tsx`)
+## UX changes (`src/routes/projects.tsx`)
 
-New "Presenter headshot (optional)" section using a `Tabs` control with three tabs:
+In the Actions column, add two icon buttons next to the existing Generate/Check/Play button on every row:
 
-1. **URL** — `<Input type="url">` for a publicly reachable image URL. Live preview thumbnail.
-2. **Upload** — `<Input type="file" accept="image/png, image/jpeg">`, ≤ 5 MB. Live preview from object URL.
-3. **Demo** — single-click "Use demo headshot" using a bundled known-good image. Shows the demo thumbnail.
+- **Edit** (pencil icon) — navigates to `/new?edit=<projectId>`. Available on every project regardless of status.
+- **Delete** (trash icon) — opens an `AlertDialog`:
+  - If `status === "ready"` (or `video_url` is set): warning text "This project has a generated video. Make sure you've downloaded it or no longer need it. This action cannot be undone."
+  - Otherwise: simpler "Delete this project? This action cannot be undone."
+  - Confirm button is destructive variant; cancel closes the dialog.
+  - On confirm → call `deleteProject`, toast result, reload list.
 
-Behavior:
-- Only the active tab's value is used at submit time; switching tabs clears the others.
-- Field is fully optional. Empty → existing Video Agents flow.
-- On submit:
-  - URL tab → send the URL as-is (validated with `z.string().url()`).
-  - Upload tab → upload to Supabase Storage bucket `headshots` at `${userId}/${uuid}-${filename}`, take the resulting public URL.
-  - Demo tab → use the constant `DEMO_HEADSHOT_URL`.
-  - Pass the resolved public URL as `headshot_url` to `createProject`.
+No changes to the video player, table columns, or status logic.
 
-## Data model (`supabase--migration`)
+## Edit flow (`src/routes/new.tsx`)
 
-- `ALTER TABLE public.projects ADD COLUMN headshot_url text NULL;`
-- Create public storage bucket `headshots` with RLS:
-  - Public `SELECT` (so HeyGen can fetch the image).
-  - Authenticated `INSERT`/`UPDATE`/`DELETE` only when `auth.uid()::text = (storage.foldername(name))[1]`.
+Reuse the existing New Project form for editing:
 
-## Server changes
+- Read `?edit=<projectId>` from the URL via `Route.useSearch()`.
+- If present, on mount call a new `getProject({ projectId })` server fn and prefill all form fields: `product_url`, `product_summary`, `target_persona`, `target_languages`, `video_length_seconds`, `headshot_url` (and select the appropriate headshot tab: URL / Upload / Demo / None based on the stored value — Upload tab shows the existing URL as a preview with an option to replace).
+- Page heading switches to "Edit Project" and submit button to "Save changes".
+- Submit calls `updateProject` instead of `createProject`. On success, navigate back to `/projects`.
+- If the project's `status` was `error`, after a successful save reset `status` to `pending`, clear `heygen_last_error`, `heygen_session_id`, `heygen_video_id`, and `video_url` so the user can re-trigger generation cleanly. Successful/processing projects keep their generation state — editing only updates the input fields.
 
-### `src/lib/projects.functions.ts`
-- Extend `createProjectSchema` with `headshot_url: z.string().url().max(2048).optional().nullable()`.
-- Persist on insert; include in `listProjects` select.
+## Server changes (`src/lib/projects.functions.ts`)
 
-### `src/lib/heygen.functions.ts`
-- In `generateProjectVideo`, branch on `project.headshot_url`:
-  - **No headshot → existing Video Agents path** (`POST /v3/video-agents`).
-  - **Headshot present → Avatar IV path**:
-    1. Generate a short spoken script (≤ ~120 words to fit `video_length_seconds`) via Lovable AI Gateway (`google/gemini-2.5-flash`) from product/persona/language inputs. New helper `buildAvatarIVScript(...)` in `src/lib/heygen-prompt.ts`.
-    2. `POST https://api.heygen.com/v2/videos`:
-       ```json
-       {
-         "image_url": "<headshot_url>",
-         "script": "<generated script>",
-         "voice_id": "<DEFAULT_AVATAR_IV_VOICE_ID>",
-         "resolution": "1080p",
-         "aspect_ratio": "16:9",
-         "expressiveness": "medium"
-       }
-       ```
-    3. Save `heygen_video_id`; leave `heygen_session_id` null so the polling branch knows which path to take. `status = 'processing'`.
-- In `checkProjectStatus`:
-  - If `heygen_session_id` is set → existing `/v3/video-agents/{id}/videos` polling.
-  - Else if `heygen_video_id` is set → `GET /v2/videos/{video_id}`; map `data.status` (`completed` / `processing` / `failed`) and `data.video_url` into the row the same way.
+Add three new server functions, all using `requireSupabaseAuth` (RLS already restricts to owner):
 
-### Constants (new `src/lib/heygen-config.ts`)
-- `DEMO_HEADSHOT_URL` — placeholder string (clearly marked `TODO: replace with real demo headshot URL`).
-- `DEFAULT_AVATAR_IV_VOICE_ID` — placeholder string (clearly marked `TODO: replace with real HeyGen voice_id`).
+1. **`getProject`** — input: `{ projectId: string }`. Selects the same columns as `listProjects` for a single row. Throws if not found.
+2. **`updateProject`** — input: same shape as `createProjectSchema` plus `projectId`. Updates the row. If the existing row's `status === "error"`, also reset the generation fields described above. Returns `{ id }`.
+3. **`deleteProject`** — input: `{ projectId: string }`. Deletes the row. Best-effort: also delete the headshot file from the `headshots` bucket if `headshot_url` points there (parse path, ignore failure). Returns `{ ok: true }`.
 
-Both placeholders are wired through end-to-end so the feature compiles and renders; you swap the two string values later when you have the real assets. Avatar IV calls will fail at HeyGen until the placeholders are replaced — that's expected.
+No database migration needed — existing RLS policies cover update/delete for the owner.
 
 ## Out of scope
 
-- No multi-photo gallery, no per-language voice mapping, no headshot management UI on the projects list.
-- No edits to the existing Video Agents path beyond the branch.
-- No video player UI changes.
+- No bulk delete, no soft-delete/trash, no edit history.
+- No changes to HeyGen logic, video player, or the headshots bucket policies.
+- No edits to projects currently in `processing` status are blocked at the UI level (server allows it, but we don't add a special guard — the Edit button is always shown).
