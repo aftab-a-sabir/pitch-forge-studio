@@ -11,7 +11,7 @@ import { generateScript, saveScript } from "@/lib/script.functions";
 import { generateProjectVideo } from "@/lib/heygen.functions";
 import { targetWordCount } from "@/lib/heygen-prompt";
 
-export const Route = createFileRoute("/projects/$projectId/script")({
+export const Route = createFileRoute("/projects_/$projectId/script")({
   component: ScriptPreviewPage,
 });
 
