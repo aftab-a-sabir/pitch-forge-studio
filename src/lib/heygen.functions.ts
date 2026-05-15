@@ -1,7 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { buildHeygenPrompt, buildAvatarIVScriptPrompt } from "./heygen-prompt";
+import {
+  buildHeygenPrompt,
+  buildAvatarIVScriptPrompt,
+  buildAvatarIVExpansionPrompt,
+  targetWordCount,
+} from "./heygen-prompt";
 import { DEFAULT_AVATAR_IV_VOICE_ID } from "./heygen-config";
 
 type HeygenVideoDetail = {
@@ -38,6 +43,40 @@ type HeygenV2VideoStatus = {
   };
 };
 
+function countWords(s: string): number {
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
+
+async function callLovableAI(args: {
+  apiKey: string;
+  model: string;
+  system: string;
+  user: string;
+}): Promise<string> {
+  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${args.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: args.model,
+      messages: [
+        { role: "system", content: args.system },
+        { role: "user", content: args.user },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`AI gateway failed (${res.status}): ${body.slice(0, 300)}`);
+  }
+  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const content = json.choices?.[0]?.message?.content?.trim();
+  if (!content) throw new Error("AI gateway returned empty content");
+  return content;
+}
+
 async function generateAvatarIVScript(input: {
   video_length_seconds: number;
   product_url: string;
@@ -46,35 +85,65 @@ async function generateAvatarIVScript(input: {
   product_summary?: string | null;
   page_context?: string | null;
   lovableApiKey: string | undefined;
+  project_id?: string;
 }): Promise<string> {
   const apiKey = input.lovableApiKey;
   if (!apiKey) return buildFallbackAvatarIVScript(input);
   const prompt = buildAvatarIVScriptPrompt(input);
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
-      messages: [
-        {
-          role: "system",
-          content: "You write concise spoken video scripts. Output plain text only.",
-        },
-        { role: "user", content: prompt },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Script generation failed (${res.status}): ${body.slice(0, 300)}`);
+  const target = targetWordCount(input.video_length_seconds);
+  const minWords = Math.round(target * 0.9);
+  const system =
+    "You are a senior product marketer writing spoken sales scripts that on-screen avatars read verbatim. " +
+    "Output plain text only. Hit the requested word count.";
+
+  const primaryModel = "openai/gpt-5-mini";
+  const fallbackModel = "google/gemini-2.5-flash";
+
+  let draft: string;
+  let modelUsed = primaryModel;
+  try {
+    draft = await callLovableAI({ apiKey, model: primaryModel, system, user: prompt });
+  } catch (e) {
+    console.warn("heygen.script.primary_failed", e instanceof Error ? e.message : e);
+    modelUsed = fallbackModel;
+    draft = await callLovableAI({ apiKey, model: fallbackModel, system, user: prompt });
   }
-  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = json.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error("Script generation returned empty content");
-  return content;
+
+  let words = countWords(draft);
+  let retried = false;
+  if (words < minWords) {
+    retried = true;
+    try {
+      const expanded = await callLovableAI({
+        apiKey,
+        model: modelUsed,
+        system,
+        user: buildAvatarIVExpansionPrompt({
+          draft,
+          min_words: minWords,
+          target_words: target,
+        }),
+      });
+      const expandedWords = countWords(expanded);
+      // Only accept the expansion if it actually grew the script.
+      if (expandedWords > words) {
+        draft = expanded;
+        words = expandedWords;
+      }
+    } catch (e) {
+      console.warn("heygen.script.expand_failed", e instanceof Error ? e.message : e);
+    }
+  }
+
+  console.log("heygen.script", {
+    project_id: input.project_id,
+    model: modelUsed,
+    target_words: target,
+    min_words: minWords,
+    words,
+    retried,
+  });
+  return draft;
 }
 
 function buildFallbackAvatarIVScript(input: {
@@ -257,6 +326,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
           product_summary: summary,
           page_context: pageContext,
           lovableApiKey,
+          project_id: project.id,
         });
         const json = await callHeygen<HeygenV2VideoCreateResponse>("/v2/videos", {
           method: "POST",
@@ -266,7 +336,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
             voice_id: project.voice_id ?? DEFAULT_AVATAR_IV_VOICE_ID,
             resolution: "1080p",
             aspect_ratio: "16:9",
-            expressiveness: "medium",
+            expressiveness: "high",
           }),
         });
         const videoId = json.data?.video_id;
