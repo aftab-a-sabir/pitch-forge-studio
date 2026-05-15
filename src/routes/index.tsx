@@ -24,13 +24,13 @@ function Index() {
           </p>
           <div className="mt-8 flex justify-center gap-3">
             <Link
-              to="/signup"
+              to="/auth"
               className="inline-flex items-center justify-center rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             >
               Sign up
             </Link>
             <Link
-              to="/signin"
+              to="/auth"
               className="inline-flex items-center justify-center rounded-md border border-input bg-background px-6 py-3 text-sm font-medium text-foreground hover:bg-accent"
             >
               Sign in
