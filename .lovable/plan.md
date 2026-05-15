@@ -1,48 +1,38 @@
-# Fix HeyGen "Invalid voice_id" error
+# Fix: Avatar IV script just spells out the URL
 
-Replace the `REPLACE_ME_VOICE_ID` placeholder with a real voice picker so HeyGen accepts the request.
+## Root cause
 
-## What we're building (Option 2 + Option 4)
+`generateAvatarIVScript` in `src/lib/heygen.functions.ts` passes only the raw URL to the LLM via `buildAvatarIVScriptPrompt`. The model has no way to know what's at that URL, so it falls back to literally reading the URL aloud. We also already capture an optional `product_summary` field on the project but never feed it into the prompt.
 
-- **Curated dropdown** of ~8 hand-picked HeyGen voices (label + gender + language).
-- **"Other / paste voice_id"** option that reveals a free-text input for power users.
-- **Per-project storage** so each project remembers its voice.
-- **Recovery for the failed project**: edit it, pick a voice, re-run generation.
+## What to change
 
-## Steps
+### 1. Use `product_summary` in the prompt
+- Select `product_summary` in the project query inside `generateProjectVideo` (Avatar IV branch).
+- Pass it through to `generateAvatarIVScript`.
 
-### 1. Voice catalog (`src/lib/heygen-config.ts`)
-Replace placeholders with a real catalog:
-```ts
-export const HEYGEN_VOICES = [
-  { id: "<real-id>", label: "English – Female (Rachel)", gender: "female", language: "English" },
-  { id: "<real-id>", label: "English – Male (Adam)",   gender: "male",   language: "English" },
-  // ~6 more covering the languages in ALL_LANGUAGES
-];
-export const DEFAULT_AVATAR_IV_VOICE_ID = HEYGEN_VOICES[0].id;
-```
-IDs sourced from HeyGen's public `/v2/voices` list.
+### 2. Fetch lightweight page context when summary is missing or thin
+- Add `fetchProductContext(url)` helper in `src/lib/heygen.functions.ts` (server-only).
+- `fetch(url)` with a 5s `AbortSignal.timeout`, `User-Agent` header, only accept `text/html`, cap body at ~200 KB.
+- Regex-extract: `<title>`, `<meta name="description">`, `<meta property="og:title">`, `<meta property="og:description">`, first `<h1>`, first 2 `<h2>`. Strip tags, collapse whitespace, truncate to ~1500 chars total.
+- Wrap in try/catch — failures return `null` and we degrade gracefully (still better than today's URL-only behavior).
 
-### 2. Database
-Migration: add nullable `voice_id text` column to `projects`.
+### 3. Update `buildAvatarIVScriptPrompt` (`src/lib/heygen-prompt.ts`)
+- Add optional `product_summary?: string` and `page_context?: string` fields to `HeygenPromptInput`.
+- When either is present, include a "Product context:" block in the prompt and instruct the model to base concrete benefits on that context — never to read the URL aloud, never to invent unverified claims.
+- Keep the existing length / persona / language guidance.
 
-### 3. Server functions (`src/lib/projects.functions.ts`)
-- Add `voice_id: z.string().min(1).max(128).nullable().optional()` to create + update schemas.
-- Persist on insert/update; include in `getProject` / `listProjects` selects.
+### 4. Update fallback script (`buildFallbackAvatarIVScript`)
+- Prefer the first 1–2 sentences of `product_summary` (or scraped description) over the bare URL when constructing the fallback.
 
-### 4. Generation (`src/lib/heygen.functions.ts`)
-- Select `voice_id` from the project row.
-- Pass `project.voice_id ?? DEFAULT_AVATAR_IV_VOICE_ID` to the `/v2/videos` payload.
-
-### 5. UI (`src/routes/new.tsx`)
-- New "Voice" `<Select>` populated from `HEYGEN_VOICES`, plus a final "Other — paste voice_id" option that reveals a text input.
-- Hydrate from existing project on edit.
-- Submit alongside other fields.
-
-### 6. Verify
-- Edit the existing failed project, pick a voice, save → status resets to `pending`.
-- Trigger generation → confirm HeyGen accepts the call (check server logs).
+### 5. No DB / UI changes required
+- `product_summary` is already captured in `src/routes/new.tsx`. We may add a one-line hint under the textarea ("Used to write your video script — the more specific, the better.") to nudge users to fill it in. Optional.
 
 ## Out of scope
-- Live `/v2/voices` browser with search — can add later.
-- Auto-picking voice from `target_languages[0]` — manual for now.
+- Full HTML→Markdown extraction or headless browser scraping.
+- Caching scraped context on the project row (can add later if latency becomes an issue).
+- Re-running script generation for already-failed/old projects automatically — user can edit + regenerate.
+
+## Verification
+- Edit an existing project, ensure summary is filled (or rely on scrape), regenerate.
+- Check server logs: `heygen.avatar_iv` log line; confirm no errors.
+- Confirm new HeyGen video script reads as a real sales pitch, not the URL.
