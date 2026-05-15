@@ -240,8 +240,8 @@ function NewProjectPage() {
         </nav>
       </header>
       <main className="mx-auto max-w-2xl px-6 py-12">
-        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">{isEdit ? "Edit Project" : "New Project"}</h1>
-        <p className="mt-2 text-muted-foreground">{isEdit ? "Update your project details." : "Generate AI avatar sales videos for your product."}</p>
+        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">{readOnly ? "View Project" : isEdit ? "Edit Project" : "New Project"}</h1>
+        <p className="mt-2 text-muted-foreground">{readOnly ? "This project's video is complete and locked from editing." : isEdit ? "Update your project details." : "Generate AI avatar sales videos for your product."}</p>
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-6">
           <div className="space-y-2">
@@ -253,6 +253,7 @@ function NewProjectPage() {
               onChange={(e) => setProductUrl(e.target.value)}
               placeholder="https://yourproduct.com"
               required
+              disabled={readOnly}
             />
             {errors.product_url && <p className="text-sm text-destructive">{errors.product_url}</p>}
           </div>
@@ -265,13 +266,14 @@ function NewProjectPage() {
               onChange={(e) => setProductSummary(e.target.value)}
               placeholder="Optional fallback description in case URL parsing fails."
               rows={4}
+              disabled={readOnly}
             />
             {errors.product_summary && <p className="text-sm text-destructive">{errors.product_summary}</p>}
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="target_persona">Target persona</Label>
-            <Select value={persona} onValueChange={setPersona}>
+            <Select value={persona} onValueChange={setPersona} disabled={readOnly}>
               <SelectTrigger id="target_persona">
                 <SelectValue placeholder="Select a persona" />
               </SelectTrigger>
@@ -292,6 +294,7 @@ function NewProjectPage() {
                 value={languages}
                 onValueChange={(vals) => setLanguages((vals as Language[]).length ? (vals as Language[]) : [DEFAULT_LANGUAGE])}
                 className="justify-start flex-wrap"
+                disabled={readOnly}
               >
                 {SELECTABLE_LANGUAGES.map((lang) => (
                   <ToggleGroupItem key={lang} value={lang} className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">
@@ -303,6 +306,7 @@ function NewProjectPage() {
               <Select
                 value={languages[0]}
                 onValueChange={(v) => setLanguages([v as Language])}
+                disabled={readOnly}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -319,7 +323,7 @@ function NewProjectPage() {
 
           <div className="space-y-2">
             <Label htmlFor="voice_id">Voice</Label>
-            <Select value={voiceChoice} onValueChange={setVoiceChoice}>
+            <Select value={voiceChoice} onValueChange={setVoiceChoice} disabled={readOnly}>
               <SelectTrigger id="voice_id">
                 <SelectValue placeholder="Select a voice" />
               </SelectTrigger>
@@ -336,6 +340,7 @@ function NewProjectPage() {
                 placeholder="HeyGen voice_id (from /v2/voices)"
                 value={customVoiceId}
                 onChange={(e) => setCustomVoiceId(e.target.value)}
+                disabled={readOnly}
               />
             )}
             <p className="text-xs text-muted-foreground">
@@ -353,6 +358,7 @@ function NewProjectPage() {
               max={120}
               value={lengthSec}
               onChange={(e) => setLengthSec(Number(e.target.value))}
+              disabled={readOnly}
             />
             <p className="text-xs text-muted-foreground">Between 15 and 120 seconds. Default 45.</p>
             {errors.video_length_seconds && <p className="text-sm text-destructive">{errors.video_length_seconds}</p>}
@@ -363,12 +369,16 @@ function NewProjectPage() {
             <p className="text-xs text-muted-foreground">
               When provided, the video uses HeyGen Avatar IV with this photo instead of a default avatar.
             </p>
-            <Tabs value={headshotTab} onValueChange={onTabChange} className="w-full">
+            <Tabs
+              value={headshotTab}
+              onValueChange={readOnly ? undefined : onTabChange}
+              className="w-full"
+            >
               <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="none">None</TabsTrigger>
-                <TabsTrigger value="url">URL</TabsTrigger>
-                <TabsTrigger value="upload">Upload</TabsTrigger>
-                <TabsTrigger value="demo">Demo</TabsTrigger>
+                <TabsTrigger value="none" disabled={readOnly}>None</TabsTrigger>
+                <TabsTrigger value="url" disabled={readOnly}>URL</TabsTrigger>
+                <TabsTrigger value="upload" disabled={readOnly}>Upload</TabsTrigger>
+                <TabsTrigger value="demo" disabled={readOnly}>Demo</TabsTrigger>
               </TabsList>
               <TabsContent value="none">
                 <p className="text-xs text-muted-foreground py-2">No headshot — use HeyGen's default avatar.</p>
@@ -382,10 +392,11 @@ function NewProjectPage() {
                     setHeadshotUrlInput(e.target.value);
                     setHeadshotPreview(e.target.value || null);
                   }}
+                  disabled={readOnly}
                 />
               </TabsContent>
               <TabsContent value="upload" className="space-y-2">
-                <Input type="file" accept="image/png,image/jpeg" onChange={onFileChange} />
+                <Input type="file" accept="image/png,image/jpeg" onChange={onFileChange} disabled={readOnly} />
                 <p className="text-xs text-muted-foreground">PNG or JPEG, up to 5MB.</p>
               </TabsContent>
               <TabsContent value="demo">
@@ -406,15 +417,17 @@ function NewProjectPage() {
           </div>
 
           <div className="flex gap-3">
-            <Button
-              type="submit"
-              disabled={submitting}
-              className="bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md shadow-primary/20"
-            >
-              {submitting ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create project")}
-            </Button>
+            {!readOnly && (
+              <Button
+                type="submit"
+                disabled={submitting}
+                className="bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md shadow-primary/20"
+              >
+                {submitting ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create project")}
+              </Button>
+            )}
             <Button type="button" variant="outline" asChild>
-              <Link to="/projects">Cancel</Link>
+              <Link to="/projects">{readOnly ? "Back to projects" : "Cancel"}</Link>
             </Button>
           </div>
         </form>
