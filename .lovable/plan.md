@@ -1,123 +1,59 @@
-## HeyGen Video Agent Integration — Plan (revised v3)
+## PostHog frontend integration
 
-Yes — three things change based on the spec you pasted:
+Add PostHog (browser SDK only) and emit three events tied to the existing flows on `/projects`. No backend tracking — keeps secrets out and avoids server cold-start cost.
 
-1. **No `language` field** on `POST /v3/video-agents`. Language goes inside the `prompt` text only (our template already does this via `{language}`).
-2. **Response is wrapped in `data`** and includes `session_id`, `status`, `video_id`, `created_at` — we should persist `video_id` too (that's what `GET /v3/videos/{video_id}` and the polling endpoint key off).
-3. **There's a sibling endpoint** `GET /v3/video-agents/{session_id}/videos` that returns the rendered `video_url`, `thumbnail_url`, `duration`, and `status` — perfect for a "Refresh status" button later. I'll wire the storage now and add a stub helper, but won't build polling yet.
+### 1. Secret + config
 
-### End-to-end flow
+- Add a build-time env var `VITE_POSTHOG_KEY` (PostHog **project API key** — this is a publishable client key, safe in the bundle) and optional `VITE_POSTHOG_HOST` (default `https://us.i.posthog.com`).
+- Request the key via `add_secret` so it lands in the project env. Document that only the project key (`phc_…`) goes here — never the personal API key.
 
-```text
-[/projects row]  →  click "Generate video"
-       │
-       ▼
-generateProjectVideo(projectId)   ← server fn, requireSupabaseAuth
-       │
-       ├─ SELECT product_url, target_persona, target_languages,
-       │     video_length_seconds FROM projects WHERE id = $1   (RLS)
-       │
-       ├─ buildHeygenPrompt({ ...row, language: target_languages[0] })
-       │     → embeds language into the prompt string
-       │
-       ├─ POST https://api.heygen.com/v3/video-agents
-       │     headers: x-api-key: $HEYGEN_API_KEY
-       │     body:    { prompt, mode: "generate" }     ← NO language field
-       │
-       ├─ response = (await res.json()).data
-       │     → { session_id, status, video_id, created_at }
-       │
-       ├─ UPDATE projects SET
-       │     heygen_session_id = data.session_id,
-       │     heygen_video_id   = data.video_id,
-       │     status            = 'Generating'
-       │
-       └─ return { session_id, video_id, status }  →  toast + row updates
-```
+### 2. Install + initialize
 
-### 1. Secret
-`add_secret HEYGEN_API_KEY`. Read inside `.handler()` only.
+- `bun add posthog-js`.
+- New file `src/lib/analytics.ts`:
+  - Exports `initAnalytics()`, `track(event, props)`, `identify(userId, props)`, `resetAnalytics()`.
+  - `initAnalytics()` no-ops when `VITE_POSTHOG_KEY` is missing or when running on the server (`typeof window === "undefined"`), so SSR and local dev without a key stay clean.
+  - Config: `capture_pageview: true`, `capture_pageleave: true`, `persistence: "localStorage+cookie"`, `autocapture: false` (we only want the explicit events; reduces noise + PII surface), `disable_session_recording: true`.
+- Call `initAnalytics()` once inside `RootComponent` in `src/routes/__root.tsx` via a `useEffect`.
 
-### 2. DB migration
-Add three nullable columns to `public.projects`:
-- `heygen_session_id text`
-- `heygen_video_id text`
-- `heygen_last_error text`
+### 3. Identify / reset on auth changes
 
-Add an UPDATE RLS policy scoped to `auth.uid() = user_id` (table currently has none).
+- In `__root.tsx` (or a small `useAnalyticsIdentity` hook), subscribe to `supabase.auth.onAuthStateChange`:
+  - On `SIGNED_IN` / initial session: `identify(user.id, { email: user.email })`.
+  - On `SIGNED_OUT`: `resetAnalytics()`.
+- Using the Supabase user id (UUID) as the distinct id keeps events tied to the user without leaking any extra PII beyond email (which PostHog already expects for `$email`).
 
-### 3. Prompt template — `src/lib/heygen-prompt.ts`
-```ts
-export const HEYGEN_PROMPT_TEMPLATE =
-  "Create a {video_length_seconds}-second sales video for the SaaS product at {product_url}, " +
-  "speaking to a {target_persona}, in {language}, in a friendly yet confident tone. " +
-  "Explain the main benefits clearly.";
+### 4. The three events
 
-export function buildHeygenPrompt(input: {
-  video_length_seconds: number; product_url: string;
-  target_persona: string; language: string;
-}): string;
-```
+All fired from the browser in `src/routes/projects.tsx` / `src/routes/new.tsx`. Property names kept consistent and minimal — no URLs, no free-text summaries.
 
-### 4. Helper server functions — `src/lib/heygen.functions.ts`
+| Event | Where | Properties |
+|---|---|---|
+| `video_generation_started` | `handleGenerate` after `generateVideo(...)` resolves successfully (also covers /new flow if it auto-generates) | `project_id`, `persona`, `languages` (array), `video_length_seconds` |
+| `video_generation_completed` | `handleCheck` when the returned `res.status === "ready"` and the previous local status was not already `ready` (guard against double-fire on repeated polls) | `project_id`, `persona`, `languages`, `video_length_seconds` |
+| `video_played` | `<video onPlay>` handler inside the Dialog (fires once per open via a ref flag) | `project_id`, `persona`, `languages` |
 
-**`createHeygenSession`** (low-level)
-- middleware: `requireSupabaseAuth`
-- `inputValidator` (zod): `{ prompt: z.string().min(1).max(10000) }` — matches spec
-- `.handler`:
-  - `POST https://api.heygen.com/v3/video-agents` with header `x-api-key: process.env.HEYGEN_API_KEY` and body `{ prompt, mode: "generate" }`
-  - On non-2xx: `console.error` status + body, throw with the upstream `error.message` if present
-  - Parse JSON, **unwrap `.data`**, return `{ session_id, status, video_id, created_at }`
+Persona/language come from the `StoredProject` already in component state — no extra fetch.
 
-**`generateProjectVideo`** (UI entry point)
-- middleware: `requireSupabaseAuth`
-- `inputValidator`: `{ projectId: z.string().uuid() }`
-- `.handler`:
-  1. Load project row via RLS-scoped `context.supabase`
-  2. `buildHeygenPrompt` using row + `target_languages[0]` (currently always `"English"`)
-  3. Call `createHeygenSession({ prompt })`
-  4. Success → update `heygen_session_id`, `heygen_video_id`, `status='Generating'`, clear `heygen_last_error`
-  5. Failure → update `heygen_last_error`, `status='Failed'`, rethrow
-  6. Return `{ session_id, video_id, status }`
+### 5. Security & safety
 
-**`listHeygenSessionVideos`** (stub, not wired to UI yet)
-- `inputValidator`: `{ sessionId: z.string() }`
-- `GET /v3/video-agents/{sessionId}/videos`, returns `{ videos: VideoDetail[] }`
-- Reserved for the later "Refresh status" button — included now so the file is complete.
+- Only the **publishable** PostHog project key ships to the client. Never expose the personal API key; never call PostHog from server functions with admin credentials.
+- `autocapture: false` and `disable_session_recording: true` prevent accidental capture of form values, product URLs, or summaries.
+- No product URL, product summary, or HeyGen session/video ids are sent as event properties — only the project UUID + the persona/language metadata the user explicitly chose.
+- `initAnalytics()` is a hard no-op on the server and when the key is unset, so SSR and unconfigured environments cannot accidentally send data.
+- Add `posthog-js` as a regular dep (it's tree-shaken into the client bundle only; `analytics.ts` is imported from client components, never from `*.server.ts` / server fns).
 
-### 5. UI trigger on `/projects`
-- Per-row "Generate video" button (shadcn `sm`), per-row loading state
-- `useServerFn(generateProjectVideo)({ data: { projectId } })`
-- `sonner` toast on success/error
-- Refetch `listProjects` so updated `status` and IDs render
-- Add a column showing truncated `heygen_video_id` (more useful than session id once we add polling)
+### 6. Verification
 
-### 6. Test page `/dev/heygen-test`
-Two buttons:
-- **Fixed prompt** → `createHeygenSession({ prompt: "Create a 30-second sales video … in English …" })` — proves HeyGen connectivity standalone
-- **First project** → `generateProjectVideo({ projectId: <newest> })` — proves the projects-row → template → HeyGen wiring
-Renders `session_id`, `video_id`, `status`, and pretty-printed raw response. Server-side `console.log("heygen.session", { session_id, video_id })`.
+1. Add the secret, deploy, open `/projects`.
+2. Click **Generate video** → confirm `video_generation_started` appears in PostHog Live Events with `persona` and `languages`.
+3. Poll **Check for Video** until status flips to `ready` → confirm `video_generation_completed`.
+4. Click **Play Video** → confirm `video_played` fires once.
+5. Confirm the `distinct_id` matches the Supabase user id and `$email` is set.
 
-### 7. Verification
-1. `add_secret HEYGEN_API_KEY`
-2. Apply migration
-3. `/dev/heygen-test` → both buttons return a `session_id` + `video_id`
-4. `/projects` → Generate button updates the row
-5. `stack_modern--server-function-logs search="heygen"` confirms IDs
-6. `supabase--read_query` on `projects` confirms persisted IDs
+### Files touched
 
-### Files
-- **new** `src/lib/heygen-prompt.ts`
-- **new** `src/lib/heygen.functions.ts` (createHeygenSession, generateProjectVideo, listHeygenSessionVideos)
-- **new** `src/routes/dev.heygen-test.tsx`
-- **edit** `src/routes/projects.tsx` — Generate button, new column, toast
-- **edit** `src/lib/projects.functions.ts` — include `heygen_session_id`, `heygen_video_id`, `heygen_last_error` in `listProjects` select
-- **new migration** — 3 columns + UPDATE policy
-- **secret** `HEYGEN_API_KEY`
-
-No new npm deps. No change to `/new`.
-
-### Out of scope (flagging)
-- Polling `GET /v3/video-agents/{session_id}/videos` to fetch the final `video_url` (helper stubbed, no UI yet)
-- Webhook receiver via `callback_url` (would be a `/api/public/webhooks/heygen` route — defer)
-- Removing `/dev/heygen-test` (keep until the real button is confirmed working)
+- new: `src/lib/analytics.ts`
+- edited: `src/routes/__root.tsx` (init + identify), `src/routes/projects.tsx` (three event calls + onPlay handler)
+- `package.json` (+ `posthog-js`)
+- secret: `VITE_POSTHOG_KEY` (and optional `VITE_POSTHOG_HOST`)
