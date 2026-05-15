@@ -14,6 +14,12 @@ const createProjectSchema = z.object({
   headshot_url: z.string().url().max(2048).optional().nullable(),
 });
 
+const updateProjectSchema = createProjectSchema.extend({
+  projectId: z.string().uuid(),
+});
+
+const projectIdSchema = z.object({ projectId: z.string().uuid() });
+
 export const createProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => createProjectSchema.parse(input))
@@ -46,4 +52,88 @@ export const listProjects = createServerFn({ method: "GET" })
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return { projects: data ?? [] };
+  });
+
+export const getProject = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => projectIdSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabase } = context;
+    const { data: row, error } = await supabase
+      .from("projects")
+      .select("id, product_url, product_summary, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url, headshot_url")
+      .eq("id", data.projectId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!row) throw new Error("Project not found");
+    return { project: row };
+  });
+
+export const updateProject = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => updateProjectSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabase } = context;
+    const { data: existing, error: fetchErr } = await supabase
+      .from("projects")
+      .select("status")
+      .eq("id", data.projectId)
+      .maybeSingle();
+    if (fetchErr) throw new Error(fetchErr.message);
+    if (!existing) throw new Error("Project not found");
+
+    const updates: Record<string, unknown> = {
+      product_url: data.product_url,
+      product_summary: data.product_summary ?? null,
+      target_persona: data.target_persona,
+      target_languages: data.target_languages,
+      video_length_seconds: data.video_length_seconds,
+      headshot_url: data.headshot_url ?? null,
+    };
+    if (existing.status === "error") {
+      updates.status = "pending";
+      updates.heygen_last_error = null;
+      updates.heygen_session_id = null;
+      updates.heygen_video_id = null;
+      updates.video_url = null;
+    }
+
+    const { error } = await supabase
+      .from("projects")
+      .update(updates)
+      .eq("id", data.projectId);
+    if (error) throw new Error(error.message);
+    return { id: data.projectId };
+  });
+
+export const deleteProject = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => projectIdSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabase } = context;
+    // Best-effort: remove headshot file from storage if it lives in our bucket.
+    const { data: existing } = await supabase
+      .from("projects")
+      .select("headshot_url")
+      .eq("id", data.projectId)
+      .maybeSingle();
+    const headshotUrl = existing?.headshot_url ?? null;
+    if (headshotUrl) {
+      const marker = "/storage/v1/object/public/headshots/";
+      const idx = headshotUrl.indexOf(marker);
+      if (idx !== -1) {
+        const path = decodeURIComponent(headshotUrl.slice(idx + marker.length));
+        try {
+          await supabase.storage.from("headshots").remove([path]);
+        } catch {
+          // ignore — deletion of the row is the primary action
+        }
+      }
+    }
+    const { error } = await supabase
+      .from("projects")
+      .delete()
+      .eq("id", data.projectId);
+    if (error) throw new Error(error.message);
+    return { ok: true };
   });
