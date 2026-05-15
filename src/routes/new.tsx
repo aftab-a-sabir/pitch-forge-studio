@@ -18,7 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { createProject, updateProject, getProject, TARGET_PERSONAS } from "@/lib/projects.functions";
-import { DEMO_HEADSHOT_URL } from "@/lib/heygen-config";
+import { DEMO_HEADSHOT_URL, HEYGEN_VOICES } from "@/lib/heygen-config";
 import { supabase } from "@/integrations/supabase/client";
 import {
   SELECTABLE_LANGUAGES,
@@ -41,6 +41,7 @@ const formSchema = z.object({
   target_languages: z.array(z.string()).min(1, "Select at least one language"),
   video_length_seconds: z.number().int().min(15).max(120),
   headshot_url: z.string().url().optional().nullable(),
+  voice_id: z.string().min(1).max(128).optional().nullable(),
 });
 
 function NewProjectPage() {
@@ -64,6 +65,8 @@ function NewProjectPage() {
   const [headshotFile, setHeadshotFile] = useState<File | null>(null);
   const [headshotPreview, setHeadshotPreview] = useState<string | null>(null);
   const [loadingProject, setLoadingProject] = useState<boolean>(isEdit);
+  const [voiceChoice, setVoiceChoice] = useState<string>("__default__");
+  const [customVoiceId, setCustomVoiceId] = useState<string>("");
 
   useEffect(() => {
     if (!editId) return;
@@ -77,6 +80,15 @@ function NewProjectPage() {
         setPersona(project.target_persona ?? "");
         setLanguages((project.target_languages ?? [DEFAULT_LANGUAGE]) as Language[]);
         setLengthSec(project.video_length_seconds ?? 45);
+        const pv = project.voice_id ?? null;
+        if (!pv) {
+          setVoiceChoice("__default__");
+        } else if (HEYGEN_VOICES.some((v) => v.id === pv)) {
+          setVoiceChoice(pv);
+        } else {
+          setVoiceChoice("__custom__");
+          setCustomVoiceId(pv);
+        }
         if (project.headshot_url) {
           if (project.headshot_url === DEMO_HEADSHOT_URL) {
             setHeadshotTab("demo");
@@ -154,6 +166,17 @@ function NewProjectPage() {
       toast.error(err instanceof Error ? err.message : "Failed to upload headshot");
       return;
     }
+    let voiceId: string | null = null;
+    if (voiceChoice === "__custom__") {
+      const trimmed = customVoiceId.trim();
+      if (!trimmed) {
+        setErrors({ voice_id: "Enter a voice_id or pick a voice from the list" });
+        return;
+      }
+      voiceId = trimmed;
+    } else if (voiceChoice !== "__default__") {
+      voiceId = voiceChoice;
+    }
     const parsed = formSchema.safeParse({
       product_url: productUrl,
       product_summary: productSummary || undefined,
@@ -161,6 +184,7 @@ function NewProjectPage() {
       target_languages: languages,
       video_length_seconds: lengthSec,
       headshot_url: headshotUrl ?? undefined,
+      voice_id: voiceId ?? undefined,
     });
     if (!parsed.success) {
       const fieldErrors: Record<string, string> = {};
@@ -275,6 +299,33 @@ function NewProjectPage() {
               </Select>
             )}
             {errors.target_languages && <p className="text-sm text-destructive">{errors.target_languages}</p>}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="voice_id">Voice</Label>
+            <Select value={voiceChoice} onValueChange={setVoiceChoice}>
+              <SelectTrigger id="voice_id">
+                <SelectValue placeholder="Select a voice" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__default__">Default (English – Female)</SelectItem>
+                {HEYGEN_VOICES.map((v) => (
+                  <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
+                ))}
+                <SelectItem value="__custom__">Other — paste voice_id</SelectItem>
+              </SelectContent>
+            </Select>
+            {voiceChoice === "__custom__" && (
+              <Input
+                placeholder="HeyGen voice_id (from /v2/voices)"
+                value={customVoiceId}
+                onChange={(e) => setCustomVoiceId(e.target.value)}
+              />
+            )}
+            <p className="text-xs text-muted-foreground">
+              Used when a presenter headshot is provided (Avatar IV).
+            </p>
+            {errors.voice_id && <p className="text-sm text-destructive">{errors.voice_id}</p>}
           </div>
 
           <div className="space-y-2">
