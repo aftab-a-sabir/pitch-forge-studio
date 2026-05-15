@@ -1,88 +1,123 @@
-## New Project form: required fields + typed server fn submission
+## HeyGen Video Agent Integration — Plan (revised v3)
 
-### Form fields (rewrite `src/routes/new.tsx`)
+Yes — three things change based on the spec you pasted:
 
-| Field | Control | Notes |
-|---|---|---|
-| `product_url` | `<Input type="url">` | required |
-| `product_summary` | `<Textarea>` | optional fallback if URL parsing fails |
-| `target_persona` | shadcn `<Select>` | options: Founder, CFO, HR Manager, IT Lead |
-| `target_language` | shadcn `<Select>` (single) | default & only visible option: **English**; stored as array `["English"]` for forward compatibility |
-| `video_length_seconds` | `<Input type="number">` | default `45`, min `15`, max `120` |
+1. **No `language` field** on `POST /v3/video-agents`. Language goes inside the `prompt` text only (our template already does this via `{language}`).
+2. **Response is wrapped in `data`** and includes `session_id`, `status`, `video_id`, `created_at` — we should persist `video_id` too (that's what `GET /v3/videos/{video_id}` and the polling endpoint key off).
+3. **There's a sibling endpoint** `GET /v3/video-agents/{session_id}/videos` that returns the rendered `video_url`, `thumbnail_url`, `duration`, and `status` — perfect for a "Refresh status" button later. I'll wire the storage now and add a stub helper, but won't build polling yet.
 
-Client-side validation with zod; inline error messages.
+### End-to-end flow
 
-### Language configuration — built for easy expansion
+```text
+[/projects row]  →  click "Generate video"
+       │
+       ▼
+generateProjectVideo(projectId)   ← server fn, requireSupabaseAuth
+       │
+       ├─ SELECT product_url, target_persona, target_languages,
+       │     video_length_seconds FROM projects WHERE id = $1   (RLS)
+       │
+       ├─ buildHeygenPrompt({ ...row, language: target_languages[0] })
+       │     → embeds language into the prompt string
+       │
+       ├─ POST https://api.heygen.com/v3/video-agents
+       │     headers: x-api-key: $HEYGEN_API_KEY
+       │     body:    { prompt, mode: "generate" }     ← NO language field
+       │
+       ├─ response = (await res.json()).data
+       │     → { session_id, status, video_id, created_at }
+       │
+       ├─ UPDATE projects SET
+       │     heygen_session_id = data.session_id,
+       │     heygen_video_id   = data.video_id,
+       │     status            = 'Generating'
+       │
+       └─ return { session_id, video_id, status }  →  toast + row updates
+```
 
-Single source of truth in `src/lib/languages.ts`:
+### 1. Secret
+`add_secret HEYGEN_API_KEY`. Read inside `.handler()` only.
 
+### 2. DB migration
+Add three nullable columns to `public.projects`:
+- `heygen_session_id text`
+- `heygen_video_id text`
+- `heygen_last_error text`
+
+Add an UPDATE RLS policy scoped to `auth.uid() = user_id` (table currently has none).
+
+### 3. Prompt template — `src/lib/heygen-prompt.ts`
 ```ts
-export type Language = "English" | "Spanish" | "French" | "German";
+export const HEYGEN_PROMPT_TEMPLATE =
+  "Create a {video_length_seconds}-second sales video for the SaaS product at {product_url}, " +
+  "speaking to a {target_persona}, in {language}, in a friendly yet confident tone. " +
+  "Explain the main benefits clearly.";
 
-// All languages the backend understands. Add new ones here first.
-export const ALL_LANGUAGES: Language[] = ["English", "Spanish", "French", "German"];
-
-// Languages the UI currently exposes. Today: English only.
-// To expose more later, add them to this array.
-export const SELECTABLE_LANGUAGES: Language[] = ["English"];
-
-export const DEFAULT_LANGUAGE: Language = "English";
-
-// Flip to true when ready for multi-select; the form re-renders as
-// a ToggleGroup automatically.
-export const MULTI_SELECT_LANGUAGES = false;
+export function buildHeygenPrompt(input: {
+  video_length_seconds: number; product_url: string;
+  target_persona: string; language: string;
+}): string;
 ```
 
-The form reads these constants:
-- `MULTI_SELECT_LANGUAGES === false` → render a `<Select>` whose options are `SELECTABLE_LANGUAGES`, default `DEFAULT_LANGUAGE`. With one entry, the control is effectively locked to English but the markup is already correct.
-- `MULTI_SELECT_LANGUAGES === true` → render a `ToggleGroup type="multiple"` over `SELECTABLE_LANGUAGES`, ≥1 required.
+### 4. Helper server functions — `src/lib/heygen.functions.ts`
 
-In both cases the submitted value is `target_languages: Language[]` (today `["English"]`), so the database column, server-fn input schema, and downstream code never change when languages are added or multi-select is enabled.
+**`createHeygenSession`** (low-level)
+- middleware: `requireSupabaseAuth`
+- `inputValidator` (zod): `{ prompt: z.string().min(1).max(10000) }` — matches spec
+- `.handler`:
+  - `POST https://api.heygen.com/v3/video-agents` with header `x-api-key: process.env.HEYGEN_API_KEY` and body `{ prompt, mode: "generate" }`
+  - On non-2xx: `console.error` status + body, throw with the upstream `error.message` if present
+  - Parse JSON, **unwrap `.data`**, return `{ session_id, status, video_id, created_at }`
 
-To pare back to English-only later: leave `SELECTABLE_LANGUAGES = ["English"]` (or remove other entries). To add Spanish to the dropdown: append `"Spanish"` to `SELECTABLE_LANGUAGES`. To enable multi-select: set `MULTI_SELECT_LANGUAGES = true`.
+**`generateProjectVideo`** (UI entry point)
+- middleware: `requireSupabaseAuth`
+- `inputValidator`: `{ projectId: z.string().uuid() }`
+- `.handler`:
+  1. Load project row via RLS-scoped `context.supabase`
+  2. `buildHeygenPrompt` using row + `target_languages[0]` (currently always `"English"`)
+  3. Call `createHeygenSession({ prompt })`
+  4. Success → update `heygen_session_id`, `heygen_video_id`, `status='Generating'`, clear `heygen_last_error`
+  5. Failure → update `heygen_last_error`, `status='Failed'`, rethrow
+  6. Return `{ session_id, video_id, status }`
 
-### Backend — `createServerFn` (TanStack typed RPC)
+**`listHeygenSessionVideos`** (stub, not wired to UI yet)
+- `inputValidator`: `{ sessionId: z.string() }`
+- `GET /v3/video-agents/{sessionId}/videos`, returns `{ videos: VideoDetail[] }`
+- Reserved for the later "Refresh status" button — included now so the file is complete.
 
-Per TanStack Start best practice on this stack, no raw `/api/createProject` route. Instead:
+### 5. UI trigger on `/projects`
+- Per-row "Generate video" button (shadcn `sm`), per-row loading state
+- `useServerFn(generateProjectVideo)({ data: { projectId } })`
+- `sonner` toast on success/error
+- Refetch `listProjects` so updated `status` and IDs render
+- Add a column showing truncated `heygen_video_id` (more useful than session id once we add polling)
 
-- `src/lib/projects.functions.ts` exports `createProject = createServerFn({ method: "POST" })`
-  - `.middleware([requireSupabaseAuth])` — auth, no CORS, no manual token plumbing
-  - `.inputValidator(z.object({ product_url, product_summary?, target_persona (enum), target_languages: z.array(z.enum(ALL_LANGUAGES)).min(1), video_length_seconds (int 15–120, default 45) }).parse)` — accepts any language in `ALL_LANGUAGES` so backend doesn't need a redeploy when the UI exposes more
-  - `.handler` — uses `context.supabase` (RLS-scoped) to `INSERT` into `public.projects`, returns `{ id }`
+### 6. Test page `/dev/heygen-test`
+Two buttons:
+- **Fixed prompt** → `createHeygenSession({ prompt: "Create a 30-second sales video … in English …" })` — proves HeyGen connectivity standalone
+- **First project** → `generateProjectVideo({ projectId: <newest> })` — proves the projects-row → template → HeyGen wiring
+Renders `session_id`, `video_id`, `status`, and pretty-printed raw response. Server-side `console.log("heygen.session", { session_id, video_id })`.
 
-- `src/routes/new.tsx` calls it via `useServerFn(createProject)` and navigates to `/projects` on success; toast on error.
+### 7. Verification
+1. `add_secret HEYGEN_API_KEY`
+2. Apply migration
+3. `/dev/heygen-test` → both buttons return a `session_id` + `video_id`
+4. `/projects` → Generate button updates the row
+5. `stack_modern--server-function-logs search="heygen"` confirms IDs
+6. `supabase--read_query` on `projects` confirms persisted IDs
 
-- Confirm `src/start.ts` registers `attachSupabaseAuth` in `functionMiddleware`.
+### Files
+- **new** `src/lib/heygen-prompt.ts`
+- **new** `src/lib/heygen.functions.ts` (createHeygenSession, generateProjectVideo, listHeygenSessionVideos)
+- **new** `src/routes/dev.heygen-test.tsx`
+- **edit** `src/routes/projects.tsx` — Generate button, new column, toast
+- **edit** `src/lib/projects.functions.ts` — include `heygen_session_id`, `heygen_video_id`, `heygen_last_error` in `listProjects` select
+- **new migration** — 3 columns + UPDATE policy
+- **secret** `HEYGEN_API_KEY`
 
-### Database (migration)
+No new npm deps. No change to `/new`.
 
-```sql
-create table public.projects (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  product_url text not null,
-  product_summary text,
-  target_persona text not null,
-  target_languages text[] not null default '{English}',
-  video_length_seconds int not null default 45,
-  status text not null default 'Generating',
-  created_at timestamptz not null default now()
-);
-alter table public.projects enable row level security;
-create policy "own projects read"   on public.projects for select using (auth.uid() = user_id);
-create policy "own projects insert" on public.projects for insert with check (auth.uid() = user_id);
-create policy "own projects delete" on public.projects for delete using (auth.uid() = user_id);
-```
-
-### Dashboard
-
-Update `src/routes/projects.tsx` to fetch real rows from `public.projects` (RLS-scoped) instead of `localStorage`. Columns: product URL, persona, languages, length, status, created.
-
-### Files touched
-
-- `src/lib/languages.ts` (new) — language config
-- `src/lib/projects.functions.ts` (new) — `createProject` server fn
-- `src/routes/new.tsx` — rewritten form, calls server fn
-- `src/routes/projects.tsx` — read from `projects` table
-- `src/start.ts` — verify `attachSupabaseAuth` in `functionMiddleware`
-- new migration for `public.projects`
+### Out of scope (flagging)
+- Polling `GET /v3/video-agents/{session_id}/videos` to fetch the final `video_url` (helper stubbed, no UI yet)
+- Webhook receiver via `callback_url` (would be a `/api/public/webhooks/heygen` route — defer)
+- Removing `/dev/heygen-test` (keep until the real button is confirmed working)
