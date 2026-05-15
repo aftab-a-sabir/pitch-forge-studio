@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +17,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
-import { createProject, TARGET_PERSONAS } from "@/lib/projects.functions";
+import { createProject, updateProject, getProject, TARGET_PERSONAS } from "@/lib/projects.functions";
 import { DEMO_HEADSHOT_URL } from "@/lib/heygen-config";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -28,6 +28,9 @@ import {
 } from "@/lib/languages";
 
 export const Route = createFileRoute("/new")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    edit: typeof search.edit === "string" ? search.edit : undefined,
+  }),
   component: NewProjectPage,
 });
 
@@ -43,7 +46,11 @@ const formSchema = z.object({
 function NewProjectPage() {
   const checking = useRequireAuth();
   const navigate = useNavigate();
+  const { edit: editId } = Route.useSearch();
   const create = useServerFn(createProject);
+  const update = useServerFn(updateProject);
+  const fetchProject = useServerFn(getProject);
+  const isEdit = !!editId;
 
   const [productUrl, setProductUrl] = useState("");
   const [productSummary, setProductSummary] = useState("");
@@ -56,8 +63,39 @@ function NewProjectPage() {
   const [headshotUrlInput, setHeadshotUrlInput] = useState("");
   const [headshotFile, setHeadshotFile] = useState<File | null>(null);
   const [headshotPreview, setHeadshotPreview] = useState<string | null>(null);
+  const [loadingProject, setLoadingProject] = useState<boolean>(isEdit);
 
-  if (checking) {
+  useEffect(() => {
+    if (!editId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { project } = await fetchProject({ data: { projectId: editId } });
+        if (cancelled) return;
+        setProductUrl(project.product_url ?? "");
+        setProductSummary(project.product_summary ?? "");
+        setPersona(project.target_persona ?? "");
+        setLanguages((project.target_languages ?? [DEFAULT_LANGUAGE]) as Language[]);
+        setLengthSec(project.video_length_seconds ?? 45);
+        if (project.headshot_url) {
+          if (project.headshot_url === DEMO_HEADSHOT_URL) {
+            setHeadshotTab("demo");
+          } else {
+            setHeadshotTab("url");
+            setHeadshotUrlInput(project.headshot_url);
+          }
+          setHeadshotPreview(project.headshot_url);
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to load project");
+      } finally {
+        if (!cancelled) setLoadingProject(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [editId, fetchProject]);
+
+  if (checking || loadingProject) {
     return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>;
   }
 
@@ -135,11 +173,16 @@ function NewProjectPage() {
     }
     setSubmitting(true);
     try {
-      await create({ data: parsed.data });
-      toast.success("Project created");
+      if (isEdit && editId) {
+        await update({ data: { ...parsed.data, projectId: editId } });
+        toast.success("Project updated");
+      } else {
+        await create({ data: parsed.data });
+        toast.success("Project created");
+      }
       navigate({ to: "/projects" });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create project");
+      toast.error(err instanceof Error ? err.message : isEdit ? "Failed to update project" : "Failed to create project");
     } finally {
       setSubmitting(false);
     }
@@ -157,8 +200,8 @@ function NewProjectPage() {
         </nav>
       </header>
       <main className="mx-auto max-w-2xl px-6 py-12">
-        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">New Project</h1>
-        <p className="mt-2 text-muted-foreground">Generate AI avatar sales videos for your product.</p>
+        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">{isEdit ? "Edit Project" : "New Project"}</h1>
+        <p className="mt-2 text-muted-foreground">{isEdit ? "Update your project details." : "Generate AI avatar sales videos for your product."}</p>
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-6">
           <div className="space-y-2">
@@ -301,7 +344,7 @@ function NewProjectPage() {
               disabled={submitting}
               className="bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md shadow-primary/20"
             >
-              {submitting ? "Creating…" : "Create project"}
+              {submitting ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create project")}
             </Button>
             <Button type="button" variant="outline" asChild>
               <Link to="/projects">Cancel</Link>

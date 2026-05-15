@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { listProjects } from "@/lib/projects.functions";
+import { deleteProject } from "@/lib/projects.functions";
 import { generateProjectVideo, checkProjectStatus } from "@/lib/heygen.functions";
 import { track } from "@/lib/analytics";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Pencil, Trash2 } from "lucide-react";
 
 export const Route = createFileRoute("/projects")({
   component: ProjectsPage,
@@ -54,7 +66,10 @@ function ProjectsPage() {
   const fetchProjects = useServerFn(listProjects);
   const generateVideo = useServerFn(generateProjectVideo);
   const checkStatus = useServerFn(checkProjectStatus);
+  const removeProject = useServerFn(deleteProject);
   const playedRef = useRef<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<StoredProject | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const reload = async () => {
     try {
@@ -112,6 +127,22 @@ function ProjectsPage() {
       toast.error(msg);
     } finally {
       setCheckingId(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirmDelete) return;
+    const id = confirmDelete.id;
+    setDeletingId(id);
+    try {
+      await removeProject({ data: { projectId: id } });
+      toast.success("Project deleted");
+      setConfirmDelete(null);
+      await reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete project");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -246,6 +277,20 @@ function ProjectsPage() {
                           {busyId === p.id ? "Starting…" : p.status === "error" ? "Retry" : "Generate video"}
                         </Button>
                       )}
+                      <Button size="icon" variant="ghost" asChild title="Edit">
+                        <Link to="/new" search={{ edit: p.id }}>
+                          <Pencil />
+                        </Link>
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title="Delete"
+                        onClick={() => setConfirmDelete(p)}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Trash2 />
+                      </Button>
                     </div>
                   </TableCell>
                   </TableRow>
@@ -306,6 +351,31 @@ function ProjectsPage() {
           ) : null}
         </DialogContent>
       </Dialog>
+      <AlertDialog
+        open={!!confirmDelete}
+        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmDelete && (confirmDelete.status === "ready" || confirmDelete.video_url)
+                ? "This project has a generated video. Make sure you've downloaded it or no longer need it. This action cannot be undone."
+                : "This action cannot be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={!!deletingId}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              disabled={!!deletingId}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deletingId ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
