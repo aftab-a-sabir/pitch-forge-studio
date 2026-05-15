@@ -1,12 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { listProjects } from "@/lib/projects.functions";
 import { generateProjectVideo, checkProjectStatus } from "@/lib/heygen.functions";
+import { track } from "@/lib/analytics";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -52,6 +53,7 @@ function ProjectsPage() {
   const fetchProjects = useServerFn(listProjects);
   const generateVideo = useServerFn(generateProjectVideo);
   const checkStatus = useServerFn(checkProjectStatus);
+  const playedRef = useRef<string | null>(null);
 
   const reload = async () => {
     try {
@@ -66,6 +68,15 @@ function ProjectsPage() {
     setBusyId(projectId);
     try {
       const res = await generateVideo({ data: { projectId } });
+      const proj = projects.find((p) => p.id === projectId);
+      if (proj) {
+        track("video_generation_started", {
+          project_id: proj.id,
+          persona: proj.target_persona,
+          languages: proj.target_languages,
+          video_length_seconds: proj.video_length_seconds,
+        });
+      }
       toast.success(`Video session started (${res.session_id.slice(0, 12)}…)`);
       await reload();
     } catch (e) {
@@ -81,8 +92,18 @@ function ProjectsPage() {
     setCheckingId(projectId);
     try {
       const res = await checkStatus({ data: { projectId } });
-      if (res.status === "ready") toast.success("Video is ready!");
-      else toast.message(`Status: ${res.status}`);
+      const prev = projects.find((p) => p.id === projectId);
+      if (res.status === "ready") {
+        toast.success("Video is ready!");
+        if (prev && prev.status !== "ready") {
+          track("video_generation_completed", {
+            project_id: prev.id,
+            persona: prev.target_persona,
+            languages: prev.target_languages,
+            video_length_seconds: prev.video_length_seconds,
+          });
+        }
+      } else toast.message(`Status: ${res.status}`);
       await reload();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to check status";
@@ -238,7 +259,21 @@ function ProjectsPage() {
             <DialogTitle className="truncate">{playing?.product_url}</DialogTitle>
           </DialogHeader>
           {playing?.video_url ? (
-            <video src={playing.video_url} controls autoPlay className="w-full rounded-md" />
+            <video
+              src={playing.video_url}
+              controls
+              autoPlay
+              className="w-full rounded-md"
+              onPlay={() => {
+                if (!playing || playedRef.current === playing.id) return;
+                playedRef.current = playing.id;
+                track("video_played", {
+                  project_id: playing.id,
+                  persona: playing.target_persona,
+                  languages: playing.target_languages,
+                });
+              }}
+            />
           ) : null}
         </DialogContent>
       </Dialog>
