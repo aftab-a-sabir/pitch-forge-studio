@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { supabase } from "@/integrations/supabase/client";
+import { listProjects } from "@/lib/projects.functions";
 import {
   Table,
   TableBody,
@@ -18,11 +20,12 @@ export const Route = createFileRoute("/projects")({
 
 type StoredProject = {
   id: string;
-  name: string;
-  productUrl: string;
-  personas: string;
-  createdAt: string;
+  product_url: string;
+  target_persona: string;
+  target_languages: string[];
+  video_length_seconds: number;
   status: string;
+  created_at: string;
 };
 
 function ProjectsPage() {
@@ -30,10 +33,7 @@ function ProjectsPage() {
   const [projects, setProjects] = useState<StoredProject[]>([]);
   const [email, setEmail] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
-
-  useEffect(() => {
-    setProjects(JSON.parse(localStorage.getItem("pitchforge_projects") || "[]"));
-  }, []);
+  const fetchProjects = useServerFn(listProjects);
 
   useEffect(() => {
     if (checking) return;
@@ -48,9 +48,15 @@ function ProjectsPage() {
         .eq("id", user.id)
         .maybeSingle();
       if (!cancelled) setDisplayName(profile?.display_name ?? null);
+      try {
+        const res = await fetchProjects();
+        if (!cancelled) setProjects(res.projects as StoredProject[]);
+      } catch {
+        // ignore
+      }
     })();
     return () => { cancelled = true; };
-  }, [checking]);
+  }, [checking, fetchProjects]);
 
   if (checking) {
     return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>;
@@ -95,9 +101,10 @@ function ProjectsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
                 <TableHead>Product URL</TableHead>
-                <TableHead>Personas</TableHead>
+                <TableHead>Persona</TableHead>
+                <TableHead>Languages</TableHead>
+                <TableHead>Length</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Created</TableHead>
               </TableRow>
@@ -112,15 +119,16 @@ function ProjectsPage() {
               ) : (
                 projects.map((p) => (
                   <TableRow key={p.id}>
-                    <TableCell className="font-medium">{p.name}</TableCell>
                     <TableCell className="max-w-xs truncate">
-                      <a href={p.productUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                        {p.productUrl}
+                      <a href={p.product_url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                        {p.product_url}
                       </a>
                     </TableCell>
-                    <TableCell className="max-w-xs truncate">{p.personas || "—"}</TableCell>
+                    <TableCell>{p.target_persona}</TableCell>
+                    <TableCell>{p.target_languages.join(", ")}</TableCell>
+                    <TableCell>{p.video_length_seconds}s</TableCell>
                     <TableCell>{p.status}</TableCell>
-                    <TableCell>{new Date(p.createdAt).toLocaleDateString()}</TableCell>
+                    <TableCell>{new Date(p.created_at).toLocaleDateString()}</TableCell>
                   </TableRow>
                 ))
               )}
