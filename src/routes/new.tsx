@@ -67,6 +67,8 @@ function NewProjectPage() {
   const [loadingProject, setLoadingProject] = useState<boolean>(isEdit);
   const [voiceChoice, setVoiceChoice] = useState<string>("__default__");
   const [customVoiceId, setCustomVoiceId] = useState<string>("");
+  const [projectStatus, setProjectStatus] = useState<string | null>(null);
+  const readOnly = isEdit && projectStatus === "ready";
 
   useEffect(() => {
     if (!editId) return;
@@ -75,6 +77,7 @@ function NewProjectPage() {
       try {
         const { project } = await fetchProject({ data: { projectId: editId } });
         if (cancelled) return;
+        setProjectStatus(project.status ?? null);
         setProductUrl(project.product_url ?? "");
         setProductSummary(project.product_summary ?? "");
         setPersona(project.target_persona ?? "");
