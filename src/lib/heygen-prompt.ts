@@ -11,8 +11,9 @@ export interface HeygenPromptInput {
 }
 
 export function buildHeygenPrompt(input: HeygenPromptInput): string {
+  const map = input as unknown as Record<string, unknown>;
   return HEYGEN_PROMPT_TEMPLATE.replace(/\{(\w+)\}/g, (_, key: string) => {
-    const value = (input as Record<string, unknown>)[key];
+    const value = map[key];
     return value === undefined || value === null ? "" : String(value);
   });
 }
