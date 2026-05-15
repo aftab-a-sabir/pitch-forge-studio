@@ -14,9 +14,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { createProject, TARGET_PERSONAS } from "@/lib/projects.functions";
+import { DEMO_HEADSHOT_URL } from "@/lib/heygen-config";
+import { supabase } from "@/integrations/supabase/client";
 import {
   SELECTABLE_LANGUAGES,
   DEFAULT_LANGUAGE,
@@ -34,6 +37,7 @@ const formSchema = z.object({
   target_persona: z.enum(TARGET_PERSONAS),
   target_languages: z.array(z.string()).min(1, "Select at least one language"),
   video_length_seconds: z.number().int().min(15).max(120),
+  headshot_url: z.string().url().optional().nullable(),
 });
 
 function NewProjectPage() {
@@ -48,20 +52,77 @@ function NewProjectPage() {
   const [lengthSec, setLengthSec] = useState<number>(45);
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [headshotTab, setHeadshotTab] = useState<"none" | "url" | "upload" | "demo">("none");
+  const [headshotUrlInput, setHeadshotUrlInput] = useState("");
+  const [headshotFile, setHeadshotFile] = useState<File | null>(null);
+  const [headshotPreview, setHeadshotPreview] = useState<string | null>(null);
 
   if (checking) {
     return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>;
   }
 
+  const onTabChange = (value: string) => {
+    const v = value as "none" | "url" | "upload" | "demo";
+    setHeadshotTab(v);
+    setHeadshotUrlInput("");
+    setHeadshotFile(null);
+    setHeadshotPreview(v === "demo" ? DEMO_HEADSHOT_URL : null);
+  };
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setHeadshotFile(file);
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error("Headshot must be 5MB or smaller");
+        setHeadshotFile(null);
+        setHeadshotPreview(null);
+        e.target.value = "";
+        return;
+      }
+      setHeadshotPreview(URL.createObjectURL(file));
+    } else {
+      setHeadshotPreview(null);
+    }
+  };
+
+  const resolveHeadshotUrl = async (): Promise<string | null> => {
+    if (headshotTab === "url") return headshotUrlInput.trim() || null;
+    if (headshotTab === "demo") return DEMO_HEADSHOT_URL;
+    if (headshotTab === "upload" && headshotFile) {
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !userData.user) throw new Error("Not signed in");
+      const userId = userData.user.id;
+      const ext = headshotFile.name.split(".").pop() || "jpg";
+      const safeExt = ext.toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+      const path = `${userId}/${crypto.randomUUID()}.${safeExt}`;
+      const { error: uploadErr } = await supabase.storage
+        .from("headshots")
+        .upload(path, headshotFile, { contentType: headshotFile.type, upsert: false });
+      if (uploadErr) throw new Error(uploadErr.message);
+      const { data: pub } = supabase.storage.from("headshots").getPublicUrl(path);
+      return pub.publicUrl;
+    }
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
+    let headshotUrl: string | null = null;
+    try {
+      headshotUrl = await resolveHeadshotUrl();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to upload headshot");
+      return;
+    }
     const parsed = formSchema.safeParse({
       product_url: productUrl,
       product_summary: productSummary || undefined,
       target_persona: persona,
       target_languages: languages,
       video_length_seconds: lengthSec,
+      headshot_url: headshotUrl ?? undefined,
     });
     if (!parsed.success) {
       const fieldErrors: Record<string, string> = {};
@@ -185,6 +246,53 @@ function NewProjectPage() {
             />
             <p className="text-xs text-muted-foreground">Between 15 and 120 seconds. Default 45.</p>
             {errors.video_length_seconds && <p className="text-sm text-destructive">{errors.video_length_seconds}</p>}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Presenter headshot (optional)</Label>
+            <p className="text-xs text-muted-foreground">
+              When provided, the video uses HeyGen Avatar IV with this photo instead of a default avatar.
+            </p>
+            <Tabs value={headshotTab} onValueChange={onTabChange} className="w-full">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="none">None</TabsTrigger>
+                <TabsTrigger value="url">URL</TabsTrigger>
+                <TabsTrigger value="upload">Upload</TabsTrigger>
+                <TabsTrigger value="demo">Demo</TabsTrigger>
+              </TabsList>
+              <TabsContent value="none">
+                <p className="text-xs text-muted-foreground py-2">No headshot — use HeyGen's default avatar.</p>
+              </TabsContent>
+              <TabsContent value="url" className="space-y-2">
+                <Input
+                  type="url"
+                  placeholder="https://example.com/headshot.jpg"
+                  value={headshotUrlInput}
+                  onChange={(e) => {
+                    setHeadshotUrlInput(e.target.value);
+                    setHeadshotPreview(e.target.value || null);
+                  }}
+                />
+              </TabsContent>
+              <TabsContent value="upload" className="space-y-2">
+                <Input type="file" accept="image/png,image/jpeg" onChange={onFileChange} />
+                <p className="text-xs text-muted-foreground">PNG or JPEG, up to 5MB.</p>
+              </TabsContent>
+              <TabsContent value="demo">
+                <p className="text-xs text-muted-foreground py-2">Use the bundled demo headshot.</p>
+              </TabsContent>
+            </Tabs>
+            {headshotPreview && (
+              <img
+                src={headshotPreview}
+                alt="Headshot preview"
+                className="mt-2 h-24 w-24 rounded-md object-cover border"
+                onError={() => {
+                  // ignore broken url previews
+                }}
+              />
+            )}
+            {errors.headshot_url && <p className="text-sm text-destructive">{errors.headshot_url}</p>}
           </div>
 
           <div className="flex gap-3">

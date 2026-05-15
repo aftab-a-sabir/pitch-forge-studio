@@ -78,7 +78,8 @@ function ProjectsPage() {
           video_length_seconds: proj.video_length_seconds,
         });
       }
-      toast.success(`Video session started (${res.session_id.slice(0, 12)}…)`);
+      const refId = res.session_id ?? res.video_id ?? "";
+      toast.success(`Video generation started${refId ? ` (${String(refId).slice(0, 12)}…)` : ""}`);
       await reload();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to start video";

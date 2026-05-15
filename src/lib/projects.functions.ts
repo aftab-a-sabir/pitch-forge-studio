@@ -11,6 +11,7 @@ const createProjectSchema = z.object({
   target_persona: z.enum(TARGET_PERSONAS),
   target_languages: z.array(z.enum(ALL_LANGUAGES)).min(1).max(ALL_LANGUAGES.length),
   video_length_seconds: z.number().int().min(15).max(120).default(45),
+  headshot_url: z.string().url().max(2048).optional().nullable(),
 });
 
 export const createProject = createServerFn({ method: "POST" })
@@ -27,6 +28,7 @@ export const createProject = createServerFn({ method: "POST" })
         target_persona: data.target_persona,
         target_languages: data.target_languages,
         video_length_seconds: data.video_length_seconds,
+        headshot_url: data.headshot_url ?? null,
       })
       .select("id")
       .single();
@@ -40,7 +42,7 @@ export const listProjects = createServerFn({ method: "GET" })
     const { supabase } = context;
     const { data, error } = await supabase
       .from("projects")
-      .select("id, product_url, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url")
+      .select("id, product_url, target_persona, target_languages, video_length_seconds, status, created_at, heygen_session_id, heygen_video_id, heygen_last_error, video_url, headshot_url")
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return { projects: data ?? [] };
