@@ -109,7 +109,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
           heygen_session_id: session.session_id,
           heygen_video_id: session.video_id,
           heygen_last_error: null,
-          status: "Generating",
+          status: "processing",
         })
         .eq("id", project.id);
       if (updateErr) throw new Error(updateErr.message);
@@ -122,7 +122,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
       const message = e instanceof Error ? e.message : String(e);
       await supabase
         .from("projects")
-        .update({ heygen_last_error: message, status: "Failed" })
+        .update({ heygen_last_error: message, status: "error" })
         .eq("id", project.id);
       throw e;
     }
@@ -139,4 +139,77 @@ export const listHeygenSessionVideos = createServerFn({ method: "POST" })
       { method: "GET" },
     );
     return { videos: json.data ?? [], has_more: json.has_more ?? false, next_token: json.next_token ?? null };
+  });
+
+export const checkProjectStatus = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z.object({ projectId: z.string().uuid() }).parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase } = context;
+    const { data: project, error } = await supabase
+      .from("projects")
+      .select("id, status, heygen_session_id, heygen_video_id, video_url")
+      .eq("id", data.projectId)
+      .single();
+    if (error || !project) throw new Error(error?.message ?? "Project not found");
+
+    if (!project.heygen_session_id) {
+      return { status: project.status, video_url: project.video_url ?? null, changed: false };
+    }
+    if (project.status === "ready" && project.video_url) {
+      return { status: "ready", video_url: project.video_url, changed: false };
+    }
+
+    let videos: HeygenVideoDetail[] = [];
+    try {
+      const json = await callHeygen<{ data: HeygenVideoDetail[] }>(
+        `/v3/video-agents/${encodeURIComponent(project.heygen_session_id)}/videos`,
+        { method: "GET" },
+      );
+      videos = json.data ?? [];
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await supabase
+        .from("projects")
+        .update({ heygen_last_error: message })
+        .eq("id", project.id);
+      throw e;
+    }
+
+    const match =
+      (project.heygen_video_id && videos.find((v) => v.id === project.heygen_video_id)) ||
+      videos[0] ||
+      null;
+
+    if (!match) {
+      return { status: project.status, video_url: null, changed: false };
+    }
+
+    const heyStatus = (match.status ?? "").toLowerCase();
+    let nextStatus: "processing" | "ready" | "error" = "processing";
+    if (heyStatus === "completed" || heyStatus === "ready" || heyStatus === "succeeded") {
+      nextStatus = "ready";
+    } else if (heyStatus === "failed" || heyStatus === "error") {
+      nextStatus = "error";
+    }
+
+    const videoUrl = match.video_url ?? null;
+    const updates: Record<string, unknown> = { status: nextStatus };
+    if (nextStatus === "ready" && videoUrl) updates.video_url = videoUrl;
+    if (!project.heygen_video_id && match.id) updates.heygen_video_id = match.id;
+
+    const { error: updateErr } = await supabase
+      .from("projects")
+      .update(updates)
+      .eq("id", project.id);
+    if (updateErr) throw new Error(updateErr.message);
+
+    return {
+      status: nextStatus,
+      video_url: nextStatus === "ready" ? videoUrl : null,
+      heygen_status: match.status,
+      changed: nextStatus !== project.status || (nextStatus === "ready" && videoUrl !== project.video_url),
+    };
   });
