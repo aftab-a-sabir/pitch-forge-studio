@@ -3,6 +3,17 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { buildHeygenPrompt } from "./heygen-prompt";
 
+type HeygenVideoDetail = {
+  id: string;
+  status: string;
+  title?: string | null;
+  video_url?: string | null;
+  thumbnail_url?: string | null;
+  duration?: number | null;
+  created_at?: number | null;
+  completed_at?: number | null;
+};
+
 const HEYGEN_BASE = "https://api.heygen.com";
 
 type HeygenSessionData = {
@@ -123,7 +134,7 @@ export const listHeygenSessionVideos = createServerFn({ method: "POST" })
     z.object({ sessionId: z.string().min(1) }).parse(input),
   )
   .handler(async ({ data }) => {
-    const json = await callHeygen<{ data: Record<string, unknown>[]; has_more?: boolean; next_token?: string | null }>(
+    const json = await callHeygen<{ data: HeygenVideoDetail[]; has_more?: boolean; next_token?: string | null }>(
       `/v3/video-agents/${encodeURIComponent(data.sessionId)}/videos`,
       { method: "GET" },
     );
