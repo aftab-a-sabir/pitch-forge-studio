@@ -264,9 +264,7 @@ function ProjectsPage() {
         }}
       >
         <DialogContent className="p-4 w-fit max-w-[min(90vw,72rem)]">
-          <DialogHeader>
-            <DialogTitle className="truncate">{playing?.product_url}</DialogTitle>
-          </DialogHeader>
+          <DialogTitle className="sr-only">Video player</DialogTitle>
           {playing?.video_url ? (
             <div
               className="mx-auto"
