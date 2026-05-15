@@ -91,11 +91,10 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => z.object({ projectId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const lovableApiKey = process.env.LOVABLE_API_KEY;
     const { data: project, error } = await supabase
       .from("projects")
       .select(
-        "id, product_url, product_summary, target_persona, target_languages, video_length_seconds, headshot_url, voice_id",
+        "id, product_url, product_summary, target_persona, target_languages, video_length_seconds, headshot_url, voice_id, script",
       )
       .eq("id", data.projectId)
       .single();
@@ -106,19 +105,12 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
     try {
       // Avatar IV (image-to-video) path when a headshot is provided.
       if (project.headshot_url) {
-        const summary = project.product_summary?.trim() || null;
-        // Always try to scrape — cheap insurance, even if a summary exists.
-        const pageContext = await fetchProductContext(project.product_url);
-        const script = await generateAvatarIVScript({
-          video_length_seconds: project.video_length_seconds,
-          product_url: project.product_url,
-          target_persona: project.target_persona,
-          language,
-          product_summary: summary,
-          page_context: pageContext,
-          lovableApiKey,
-          project_id: project.id,
-        });
+        let script = project.script?.trim() || "";
+        if (!script) {
+          // Backward compatibility: if no stored script (e.g. an older project), generate one now.
+          const result = await generateScript({ data: { projectId: project.id } });
+          script = result.script;
+        }
         const json = await callHeygen<HeygenV2VideoCreateResponse>("/v2/videos", {
           method: "POST",
           body: JSON.stringify({
