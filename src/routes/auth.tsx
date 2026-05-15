@@ -7,12 +7,16 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export const Route = createFileRoute("/auth")({
+  validateSearch: (search: Record<string, unknown>): { tab: "signin" | "signup" } => ({
+    tab: search.tab === "signup" ? "signup" : "signin",
+  }),
   component: AuthPage,
 });
 
 function AuthPage() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState("signin");
+  const { tab: initialTab } = Route.useSearch();
+  const [tab, setTab] = useState<string>(initialTab);
 
   // Sign in state
   const [siEmail, setSiEmail] = useState("");
