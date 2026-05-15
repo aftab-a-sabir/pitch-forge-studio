@@ -52,6 +52,7 @@ export type Database = {
           target_persona: string
           user_id: string
           video_length_seconds: number
+          video_url: string | null
         }
         Insert: {
           created_at?: string
@@ -66,6 +67,7 @@ export type Database = {
           target_persona: string
           user_id: string
           video_length_seconds?: number
+          video_url?: string | null
         }
         Update: {
           created_at?: string
@@ -80,6 +82,7 @@ export type Database = {
           target_persona?: string
           user_id?: string
           video_length_seconds?: number
+          video_url?: string | null
         }
         Relationships: []
       }
