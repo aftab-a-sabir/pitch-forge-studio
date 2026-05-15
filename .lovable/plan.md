@@ -1,30 +1,56 @@
 ## Goal
 
-When a project has a completed video (`status === "ready"`), it should not be editable. Users can still open it to view its details, but every input is read-only and Save is hidden.
+On the New Project screen, simplify the user-facing flow so only the default automatic script and video generation is available. Move Voice and Presenter Headshot to the bottom, group them in a visually distinct "Coming Soon" container, and disable their controls.
 
-## Changes
+## Changes — `src/routes/new.tsx` only
 
-### 1. `src/routes/projects.tsx` — Edit button becomes "View"
+### 1. Reorder fields
 
-For rows where `p.status === "ready"`:
-- Swap the `Pencil` icon for an `Eye` icon (lucide-react), title="View".
-- Keep the same link target (`/new?edit=p.id`) so the same page is reused in read-only mode.
+New top-to-bottom order inside the form:
+1. Product URL
+2. Product summary (optional)
+3. Target persona
+4. Target language(s)
+5. Video length (seconds)
+6. **Coming Soon group** (Voice + Presenter Headshot, see below)
+7. Submit / Cancel buttons
 
-Other statuses keep the existing Pencil/Edit behavior unchanged.
+Voice and Presenter Headshot blocks are removed from their current positions and re-rendered together at the bottom.
 
-### 2. `src/routes/new.tsx` — Read-only mode when project is ready
+### 2. "Coming Soon" group container
 
-- After `getProject` returns, store the project's `status` in local state.
-- Derive `const readOnly = isEdit && projectStatus === "ready";`.
-- Update page heading/subtitle when `readOnly` ("View Project" / "This project's video is complete and locked from editing.").
-- Pass `disabled={readOnly}` (or `readOnly` for `Input`/`Textarea`) to all form fields: product URL, summary, persona Select, languages ToggleGroup/Select, voice Select + custom voice input, length input, headshot Tabs + URL/file inputs.
-- Hide the Submit button when `readOnly`; keep the Cancel button but relabel to "Back to projects".
-- Skip the headshot upload path entirely in `handleSubmit` when `readOnly` (defensive — submission shouldn't be reachable).
+Wrap Voice and Presenter Headshot in a single container styled as a soft grey card to visually separate it from the active form:
 
-### Technical notes
+```tsx
+<div className="rounded-lg border border-dashed bg-muted/40 p-4 space-y-6 relative">
+  <div className="flex items-center justify-between">
+    <h3 className="text-sm font-semibold text-muted-foreground">Advanced options</h3>
+    <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+      Coming soon
+    </span>
+  </div>
+  {/* Voice block */}
+  {/* Presenter headshot block */}
+</div>
+```
 
-- `status` is already returned by `getProject` (selected in `projects.functions.ts`), so no backend change.
-- The server-side `updateProject` already keeps existing values intact; we are only locking the UI. No migration needed.
-- A defensive guard in `handleSubmit` (`if (readOnly) return;`) prevents accidental submits.
+Inside this container, every interactive control gets `disabled` (and Tabs gets `onValueChange={undefined}`) regardless of `readOnly`. Helper text under each is replaced with "Coming soon — the default voice and avatar will be used."
 
-No changes to RLS, schema, or server functions.
+### 3. Disable submission of advanced fields
+
+In `handleSubmit`, force the "default automatic" path by ignoring any prior state from those controls:
+- Skip `resolveHeadshotUrl()` entirely; pass `headshot_url: undefined`.
+- Skip the voice resolution branch; pass `voice_id: undefined`.
+- Remove the `if (parsed.data.headshot_url)` branch that routes to `/projects/$projectId/script`. After create, always `navigate({ to: "/projects" })`.
+
+This guarantees only the default automatic script + video generation runs, matching what the disabled UI advertises.
+
+### 4. Keep read-only mode intact
+
+The existing `readOnly` (completed video) behavior continues to work — the Coming Soon controls are already disabled in both modes; other fields keep their existing `disabled={readOnly}` props.
+
+## Out of scope
+
+- No backend / server function changes. `createProject` / `updateProject` still accept `voice_id` and `headshot_url`; we simply stop sending them from the UI.
+- No changes to `projects.tsx`, the script preview route, or HeyGen config.
+- No design-system token changes; reuse existing `bg-muted`, `border-dashed`, `text-muted-foreground`.
