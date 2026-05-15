@@ -196,7 +196,11 @@ export const checkProjectStatus = createServerFn({ method: "POST" })
     }
 
     const videoUrl = match.video_url ?? null;
-    const updates: Record<string, unknown> = { status: nextStatus };
+    const updates: {
+      status: "processing" | "ready" | "error";
+      video_url?: string;
+      heygen_video_id?: string;
+    } = { status: nextStatus };
     if (nextStatus === "ready" && videoUrl) updates.video_url = videoUrl;
     if (!project.heygen_video_id && match.id) updates.heygen_video_id = match.id;
 
