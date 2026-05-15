@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 export const Route = createFileRoute("/new")({
   component: NewProjectPage,
@@ -19,6 +20,7 @@ type StoredProject = {
 };
 
 function NewProjectPage() {
+  const checking = useRequireAuth();
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [productUrl, setProductUrl] = useState("");
@@ -38,6 +40,10 @@ function NewProjectPage() {
     localStorage.setItem("pitchforge_projects", JSON.stringify([project, ...existing]));
     navigate({ to: "/projects" });
   };
+
+  if (checking) {
+    return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>;
+  }
 
   return (
     <div className="min-h-screen bg-background">
