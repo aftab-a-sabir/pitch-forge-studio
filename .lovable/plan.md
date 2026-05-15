@@ -1,68 +1,54 @@
-# Fix Avatar IV scripts: real context, editable preview
+## What's actually happening
 
-## The actual problem
+When you click **Review script & render** on the Projects page, it *is* doing something — it navigates to `/projects/<id>/script`. But two things make it feel broken:
 
-The photo+voice path produces nonsense not because of the model or word count, but because we ask an LLM to write a sales script with almost no knowledge of the product. `product_summary` is often empty, the URL scrape is thin, and the script is rendered verbatim by HeyGen Avatar IV with no chance to review.
+1. The button is a plain link with no pressed/loading state, so the click feels ignored while the next page is fetching.
+2. On the script page itself, when a script needs to be generated (or regenerated) the textarea just shows a faint "Generating script…" placeholder. There's no spinner, no disabled-but-styled "working" button, and the **Looks good — render video** button is silently disabled during generation — so a user who clicks it gets nothing.
+3. When you do click **Looks good — render video**, the only feedback is the button text changing to "Starting render…". On a slow render-start that's easy to miss, and the gradient styling masks the disabled state.
 
-The no-photo path works because HeyGen Video Agents does its own internal research from the URL — we never see that script. We will leave that path alone.
+The script *does* appear — it's the big editable textarea in the middle of the page (under "Review the script"). It's just not obvious that it's the script while it's blank/loading.
 
-## What changes
+## Fix (UI/UX only — no logic changes)
 
-### 1. Real product research (server)
-- New server fn `researchProduct({ url })`:
-  - `fetch(url)` with a normal User-Agent.
-  - Extract readable text (strip tags/scripts/styles, collapse whitespace, cap ~15k chars).
-  - Pull `<title>`, `<meta name="description">`, `<meta property="og:*">`.
-  - LLM pass (gpt-5-mini, tool-call structured output) → `{ name, value_prop, audience, features[3-5], tone }`.
-- Persist as `product_brief` (jsonb) on `projects`. Cache: regenerate only if URL changes or user clicks "re-research".
-- If the page returns <500 chars of readable text, surface a clear "couldn't read this page — paste a short description" fallback in the UI (text area on the New Project form).
+### 1. Projects page — `Review script & render` button
+- Replace the plain `<Link>`-as-button with a click-handled button that:
+  - Tracks a per-row `navigatingId` state.
+  - On click, sets `navigatingId = p.id`, then `navigate({ to: "/projects/$projectId/script", params })`.
+  - While `navigatingId === p.id`: show a spinner + label "Opening script…", apply `variant="default"` (filled, not secondary) so the color change is obvious, and disable the button.
+- Same treatment for the `Retry — review script` variant.
 
-### 2. One canonical script per project
-- New server fn `generateScript({ project_id })` that:
-  - Loads `product_brief` + `target_persona` + `target_languages` + `video_length_seconds`.
-  - Builds a 4-beat prompt (hook → product reveal → 2-3 benefits grounded in `features[]` → CTA), with explicit min/max word budget at ~2.7 wps.
-  - Uses gpt-5-mini.
-  - One expansion retry if under min words.
-- Stores result on a new `script` (text) column with `script_updated_at`.
-- Logs `{ project_id, words, target, retried }`.
+### 2. Script page (`projects.$projectId.script.tsx`) — make the script obvious
+- Add a clear section heading **Generated script** directly above the textarea so it's named, not just a blank field.
+- While `generating === true`:
+  - Overlay a centered spinner + "Writing your script… this takes 10–20 seconds" message on top of the textarea (textarea stays visible but greyed).
+  - Show a small skeleton/pulse on the word-count line.
+- When generation finishes, briefly flash a subtle success ring around the textarea (1s) so the user sees it just populated.
+- Add an empty-state message inside the textarea container if generation fails (currently only a toast fires and the field is left blank).
 
-### 3. Editable preview before render
-- After project create, route to a new `/projects/$id/script` step that shows the generated script in a textarea with:
-  - "Regenerate" (calls `generateScript` again).
-  - "Looks good — render video" (kicks off the existing render).
-- Word count + estimated duration shown live.
-- The render handlers read `projects.script` instead of generating on the fly.
+### 3. `Looks good — render video` button — visible "working" state
+- While `rendering === true`:
+  - Swap to a distinct color (e.g. `variant="secondary"` with a pulsing ring, or drop the gradient and use solid `bg-muted text-muted-foreground`) so it visibly *changes*, not just changes label.
+  - Show a spinner icon + "Starting render…".
+  - Keep it disabled (already does).
+- Same treatment for **Regenerate** while `generating === true` (spinner + greyed).
 
-### 4. Render path wiring
-- **Photo + voice (Avatar IV):** send `projects.script` verbatim. Remove the inline `generateAvatarIVScript` call from the render path.
-- **No photo (Video Agents):** unchanged — keeps using the URL-driven prompt as today (per your decision).
+### 4. Small polish
+- Disable **Regenerate** and **Render** while *either* `generating` or `rendering` is true (already done) — but also visually grey them, not just disabled-opacity.
+- Add a `aria-busy` attribute on the textarea container during generation for screen readers.
 
-### 5. Cleanup
-- Delete the now-unused expansion logic inside `heygen.functions.ts` render path (moved into `generateScript`).
-- Keep the `heygen.script` log line in the new generator for verification.
+## Files to change
 
-## Files touched
-
-- `supabase/migrations/<new>.sql` — add `product_brief jsonb`, `script text`, `script_updated_at timestamptz` to `projects`.
-- `src/lib/research.functions.ts` — new: `researchProduct`.
-- `src/lib/script.functions.ts` — new: `generateScript`.
-- `src/lib/heygen.functions.ts` — read `projects.script` for Avatar IV render; drop inline script generation; no-photo path unchanged.
-- `src/lib/heygen-prompt.ts` — keep helpers, move 4-beat prompt builder here, remove unused expansion variants if any.
-- `src/routes/new.tsx` — after submit, route to script step instead of straight to render. Add optional "product description" textarea fallback.
-- `src/routes/projects.$id.script.tsx` — new: editable preview + regenerate + confirm-render.
-- `src/integrations/supabase/types.ts` — auto-regenerated by migration.
+- `src/routes/projects.tsx` — replace the Link-as-button with a stateful navigate button (~15 lines around line 272–280).
+- `src/routes/projects.$projectId.script.tsx` — add overlay/spinner during generation, success flash, "Generated script" heading, restyled action buttons (~30 lines added).
 
 ## Out of scope
 
-- Switching the no-photo path to use our script.
-- Headless-browser scraping for JS-rendered sites (we'll use simple fetch + readability; user can paste a description if scrape is empty).
-- Multi-language script translation polish (existing behavior preserved).
-- Voice/avatar selection changes.
+- Server-side script generation logic (already working — confirmed via worker logs that `getProject` returns 200 and a stored script loads).
+- Any change to research, render, or HeyGen calls.
 
-## Verification
+## How to verify
 
-1. Create a project for a known SaaS URL → confirm `product_brief` populates with real features.
-2. Script preview shows a coherent 4-beat script in target word range.
-3. Edit script → click render → rendered video speaks the edited text verbatim.
-4. Server logs show `heygen.script { words, target, retried }` within ~10% of target.
-5. No-photo flow still produces the same quality video as before (regression check).
+1. From `/projects`, click **Review script & render** — button should immediately turn into "Opening script…" with a spinner before the page transition completes.
+2. On the script page with no stored script, you should see a spinner overlay + "Writing your script…" message until the textarea fills.
+3. Click **Looks good — render video** — the button should visibly change color and show a spinner, not just change label.
+4. Click **Regenerate** — same visible working state.
