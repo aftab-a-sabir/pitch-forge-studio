@@ -43,9 +43,10 @@ async function generateAvatarIVScript(input: {
   product_url: string;
   target_persona: string;
   language: string;
+  lovableApiKey: string | undefined;
 }): Promise<string> {
-  const apiKey = process.env.LOVABLE_API_KEY;
-  if (!apiKey) throw new Error("LOVABLE_API_KEY is not configured");
+  const apiKey = input.lovableApiKey;
+  if (!apiKey) return buildFallbackAvatarIVScript(input);
   const prompt = buildAvatarIVScriptPrompt(input);
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
@@ -56,7 +57,10 @@ async function generateAvatarIVScript(input: {
     body: JSON.stringify({
       model: "google/gemini-2.5-flash",
       messages: [
-        { role: "system", content: "You write concise spoken video scripts. Output plain text only." },
+        {
+          role: "system",
+          content: "You write concise spoken video scripts. Output plain text only.",
+        },
         { role: "user", content: prompt },
       ],
     }),
@@ -69,6 +73,18 @@ async function generateAvatarIVScript(input: {
   const content = json.choices?.[0]?.message?.content?.trim();
   if (!content) throw new Error("Script generation returned empty content");
   return content;
+}
+
+function buildFallbackAvatarIVScript(input: {
+  product_url: string;
+  target_persona: string;
+  language: string;
+}): string {
+  return [
+    `If you are a ${input.target_persona}, you need clear answers before you commit to another tool.`,
+    `${input.product_url} is built to help your team move faster, communicate value clearly, and turn interest into action without adding extra complexity.`,
+    `Take a closer look today and see how it can support your next priority.`,
+  ].join(" ");
 }
 
 async function callHeygen<T>(path: string, init: RequestInit): Promise<T> {
@@ -120,14 +136,15 @@ export const createHeygenSession = createServerFn({ method: "POST" })
 
 export const generateProjectVideo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
-    z.object({ projectId: z.string().uuid() }).parse(input),
-  )
+  .inputValidator((input: unknown) => z.object({ projectId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
+    const lovableApiKey = process.env.LOVABLE_API_KEY;
     const { data: project, error } = await supabase
       .from("projects")
-      .select("id, product_url, target_persona, target_languages, video_length_seconds, headshot_url")
+      .select(
+        "id, product_url, target_persona, target_languages, video_length_seconds, headshot_url",
+      )
       .eq("id", data.projectId)
       .single();
     if (error || !project) throw new Error(error?.message ?? "Project not found");
@@ -142,6 +159,7 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
           product_url: project.product_url,
           target_persona: project.target_persona,
           language,
+          lovableApiKey,
         });
         const json = await callHeygen<HeygenV2VideoCreateResponse>("/v2/videos", {
           method: "POST",
@@ -214,22 +232,23 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
 
 export const listHeygenSessionVideos = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
-    z.object({ sessionId: z.string().min(1) }).parse(input),
-  )
+  .inputValidator((input: unknown) => z.object({ sessionId: z.string().min(1) }).parse(input))
   .handler(async ({ data }) => {
-    const json = await callHeygen<{ data: HeygenVideoDetail[]; has_more?: boolean; next_token?: string | null }>(
-      `/v3/video-agents/${encodeURIComponent(data.sessionId)}/videos`,
-      { method: "GET" },
-    );
-    return { videos: json.data ?? [], has_more: json.has_more ?? false, next_token: json.next_token ?? null };
+    const json = await callHeygen<{
+      data: HeygenVideoDetail[];
+      has_more?: boolean;
+      next_token?: string | null;
+    }>(`/v3/video-agents/${encodeURIComponent(data.sessionId)}/videos`, { method: "GET" });
+    return {
+      videos: json.data ?? [],
+      has_more: json.has_more ?? false,
+      next_token: json.next_token ?? null,
+    };
   });
 
 export const checkProjectStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
-    z.object({ projectId: z.string().uuid() }).parse(input),
-  )
+  .inputValidator((input: unknown) => z.object({ projectId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
     const { data: project, error } = await supabase
@@ -265,15 +284,22 @@ export const checkProjectStatus = createServerFn({ method: "POST" })
         nextStatus = "error";
       }
       const videoUrl = v2?.video_url ?? null;
-      const updates: { status: "processing" | "ready" | "error"; video_url?: string } = { status: nextStatus };
+      const updates: { status: "processing" | "ready" | "error"; video_url?: string } = {
+        status: nextStatus,
+      };
       if (nextStatus === "ready" && videoUrl) updates.video_url = videoUrl;
-      const { error: updateErr } = await supabase.from("projects").update(updates).eq("id", project.id);
+      const { error: updateErr } = await supabase
+        .from("projects")
+        .update(updates)
+        .eq("id", project.id);
       if (updateErr) throw new Error(updateErr.message);
       return {
         status: nextStatus,
         video_url: nextStatus === "ready" ? videoUrl : null,
         heygen_status: v2?.status,
-        changed: nextStatus !== project.status || (nextStatus === "ready" && videoUrl !== project.video_url),
+        changed:
+          nextStatus !== project.status ||
+          (nextStatus === "ready" && videoUrl !== project.video_url),
       };
     }
 
@@ -290,10 +316,7 @@ export const checkProjectStatus = createServerFn({ method: "POST" })
       videos = json.data ?? [];
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      await supabase
-        .from("projects")
-        .update({ heygen_last_error: message })
-        .eq("id", project.id);
+      await supabase.from("projects").update({ heygen_last_error: message }).eq("id", project.id);
       throw e;
     }
 
@@ -333,6 +356,7 @@ export const checkProjectStatus = createServerFn({ method: "POST" })
       status: nextStatus,
       video_url: nextStatus === "ready" ? videoUrl : null,
       heygen_status: match.status,
-      changed: nextStatus !== project.status || (nextStatus === "ready" && videoUrl !== project.video_url),
+      changed:
+        nextStatus !== project.status || (nextStatus === "ready" && videoUrl !== project.video_url),
     };
   });
