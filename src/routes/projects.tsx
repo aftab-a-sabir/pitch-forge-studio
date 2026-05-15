@@ -52,6 +52,7 @@ type StoredProject = {
   heygen_video_id?: string | null;
   heygen_last_error?: string | null;
   video_url?: string | null;
+  headshot_url?: string | null;
 };
 
 function ProjectsPage() {
@@ -268,14 +269,25 @@ function ProjectsPage() {
                           {checkingId === p.id ? "Checking…" : "Check for Video"}
                         </Button>
                       ) : (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          disabled={busyId === p.id}
-                          onClick={() => handleGenerate(p.id)}
-                        >
-                          {busyId === p.id ? "Starting…" : p.status === "error" ? "Retry" : "Generate video"}
-                        </Button>
+                        p.headshot_url ? (
+                          <Button size="sm" variant="secondary" asChild>
+                            <Link
+                              to="/projects/$projectId/script"
+                              params={{ projectId: p.id }}
+                            >
+                              {p.status === "error" ? "Retry — review script" : "Review script & render"}
+                            </Link>
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={busyId === p.id}
+                            onClick={() => handleGenerate(p.id)}
+                          >
+                            {busyId === p.id ? "Starting…" : p.status === "error" ? "Retry" : "Generate video"}
+                          </Button>
+                        )
                       )}
                       <Button size="icon" variant="ghost" asChild title="Edit">
                         <Link to="/new" search={{ edit: p.id }}>
