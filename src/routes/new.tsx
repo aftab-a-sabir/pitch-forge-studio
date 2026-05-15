@@ -163,32 +163,15 @@ function NewProjectPage() {
     e.preventDefault();
     if (readOnly) return;
     setErrors({});
-    let headshotUrl: string | null = null;
-    try {
-      headshotUrl = await resolveHeadshotUrl();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to upload headshot");
-      return;
-    }
-    let voiceId: string | null = null;
-    if (voiceChoice === "__custom__") {
-      const trimmed = customVoiceId.trim();
-      if (!trimmed) {
-        setErrors({ voice_id: "Enter a voice_id or pick a voice from the list" });
-        return;
-      }
-      voiceId = trimmed;
-    } else if (voiceChoice !== "__default__") {
-      voiceId = voiceChoice;
-    }
+    // Voice + headshot are "Coming soon" — always submit the default automatic path.
     const parsed = formSchema.safeParse({
       product_url: productUrl,
       product_summary: productSummary || undefined,
       target_persona: persona,
       target_languages: languages,
       video_length_seconds: lengthSec,
-      headshot_url: headshotUrl ?? undefined,
-      voice_id: voiceId ?? undefined,
+      headshot_url: undefined,
+      voice_id: undefined,
     });
     if (!parsed.success) {
       const fieldErrors: Record<string, string> = {};
@@ -206,18 +189,8 @@ function NewProjectPage() {
         toast.success("Project updated");
         navigate({ to: "/projects" });
       } else {
-        const created = await create({ data: parsed.data });
+        await create({ data: parsed.data });
         toast.success("Project created");
-        // Photo+voice (Avatar IV) renders read a stored script verbatim, so
-        // route through the script preview step. The no-photo path uses
-        // HeyGen Video Agents which writes its own script — skip the step.
-        if (parsed.data.headshot_url) {
-          navigate({
-            to: "/projects/$projectId/script",
-            params: { projectId: created.id },
-          });
-          return;
-        }
         navigate({ to: "/projects" });
         return;
       }
