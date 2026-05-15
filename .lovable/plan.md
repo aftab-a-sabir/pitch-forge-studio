@@ -1,54 +1,66 @@
-## What's actually happening
+## What I found
 
-When you click **Review script & render** on the Projects page, it *is* doing something — it navigates to `/projects/<id>/script`. But two things make it feel broken:
+The app is hanging before it even reaches script generation. The page stays on the top-level `Loading…` state because `useRequireAuth()` never finishes resolving auth in this route session. In the browser trace I saw only:
 
-1. The button is a plain link with no pressed/loading state, so the click feels ignored while the next page is fetching.
-2. On the script page itself, when a script needs to be generated (or regenerated) the textarea just shows a faint "Generating script…" placeholder. There's no spinner, no disabled-but-styled "working" button, and the **Looks good — render video** button is silently disabled during generation — so a user who clicks it gets nothing.
-3. When you do click **Looks good — render video**, the only feedback is the button text changing to "Starting render…". On a slow render-start that's easy to miss, and the gradient styling masks the disabled state.
+- auth/profile requests
+- a `listProjects` server call
+- no `getProject` call
+- no `generateScript` call
+- no AI/script logs
 
-The script *does* appear — it's the big editable textarea in the middle of the page (under "Review the script"). It's just not obvious that it's the script while it's blank/loading.
+So the current spinner is not primarily an LLM quality problem. It is an app flow/auth/loading-state problem, with a second risk that script generation can still take too long once it actually starts.
 
-## Fix (UI/UX only — no logic changes)
+## Answer on alternate LLMs
 
-### 1. Projects page — `Review script & render` button
-- Replace the plain `<Link>`-as-button with a click-handled button that:
-  - Tracks a per-row `navigatingId` state.
-  - On click, sets `navigatingId = p.id`, then `navigate({ to: "/projects/$projectId/script", params })`.
-  - While `navigatingId === p.id`: show a spinner + label "Opening script…", apply `variant="default"` (filled, not secondary) so the color change is obvious, and disable the button.
-- Same treatment for the `Retry — review script` variant.
+An alternate LLM could help script quality and maybe latency, but it will not fix this specific “Opening script / still spinning” failure. The app currently gets stuck before the script generation request is made. A faster model only helps after the route successfully loads and calls `generateScript`.
 
-### 2. Script page (`projects.$projectId.script.tsx`) — make the script obvious
-- Add a clear section heading **Generated script** directly above the textarea so it's named, not just a blank field.
-- While `generating === true`:
-  - Overlay a centered spinner + "Writing your script… this takes 10–20 seconds" message on top of the textarea (textarea stays visible but greyed).
-  - Show a small skeleton/pulse on the word-count line.
-- When generation finishes, briefly flash a subtle success ring around the textarea (1s) so the user sees it just populated.
-- Add an empty-state message inside the textarea container if generation fails (currently only a toast fires and the field is left blank).
+## Recommended approach
 
-### 3. `Looks good — render video` button — visible "working" state
-- While `rendering === true`:
-  - Swap to a distinct color (e.g. `variant="secondary"` with a pulsing ring, or drop the gradient and use solid `bg-muted text-muted-foreground`) so it visibly *changes*, not just changes label.
-  - Show a spinner icon + "Starting render…".
-  - Keep it disabled (already does).
-- Same treatment for **Regenerate** while `generating === true` (spinner + greyed).
+### 1. Fix the script page loading gate
+- Make the script page stop depending on an auth hook that can hang indefinitely.
+- Load auth/project state with explicit success, error, and timeout states.
+- If auth is missing, redirect to `/auth`; if project load fails, show a retryable error instead of permanent `Loading…`.
 
-### 4. Small polish
-- Disable **Regenerate** and **Render** while *either* `generating` or `rendering` is true (already done) — but also visually grey them, not just disabled-opacity.
-- Add a `aria-busy` attribute on the textarea container during generation for screen readers.
+### 2. Make script generation a real background-style step
+- Split the page state into clear phases:
+  - `Loading project`
+  - `Researching product`
+  - `Writing script`
+  - `Ready to review`
+  - `Failed — retry`
+- Add a client-side timeout around the script generation call so users never stare at an infinite spinner.
+- If the request times out or fails, show a clear message and a `Try again` button.
 
-## Files to change
+### 3. Use a faster default model for scripts
+- Switch script/research generation from the current model to Lovable AI’s faster default model.
+- Keep a fallback model option only if the first model fails or returns weak/empty output.
+- This improves speed/reliability, but is secondary to fixing the hanging page state.
 
-- `src/routes/projects.tsx` — replace the Link-as-button with a stateful navigate button (~15 lines around line 272–280).
-- `src/routes/projects.$projectId.script.tsx` — add overlay/spinner during generation, success flash, "Generated script" heading, restyled action buttons (~30 lines added).
+### 4. Keep video rendering separate
+- Pressing `Looks good — render video` should still return quickly after the video provider accepts the job.
+- The Projects page can continue polling/checking render status.
+- No-photo Video Agents path remains unchanged.
 
-## Out of scope
+## Technical changes
 
-- Server-side script generation logic (already working — confirmed via worker logs that `getProject` returns 200 and a stored script loads).
-- Any change to research, render, or HeyGen calls.
+- `src/routes/projects.$projectId.script.tsx`
+  - Replace the current single `loading/checking/generating` interaction with explicit phase/error state.
+  - Ensure `loading` is always cleared on auth/project failures.
+  - Add retry buttons for project load and script generation failures.
+  - Add timeout handling so long script generation does not spin forever.
 
-## How to verify
+- `src/lib/script.functions.ts`
+  - Use a faster model for script generation.
+  - Add stronger logging around start/success/failure so we can see exactly where it stalls.
 
-1. From `/projects`, click **Review script & render** — button should immediately turn into "Opening script…" with a spinner before the page transition completes.
-2. On the script page with no stored script, you should see a spinner overlay + "Writing your script…" message until the textarea fills.
-3. Click **Looks good — render video** — the button should visibly change color and show a spinner, not just change label.
-4. Click **Regenerate** — same visible working state.
+- `src/lib/research.functions.ts`
+  - Use a faster model for product-brief extraction.
+  - Add start/success/failure logs and keep the existing fetch timeout.
+
+## Verification
+
+1. Open `/projects/:id/script` directly.
+2. Confirm it leaves `Loading…` and either shows the script editor or a retryable error.
+3. Confirm the network trace includes `getProject`, then `generateScript` only when needed.
+4. Confirm script generation either completes or fails with a visible retry button, never an infinite spinner.
+5. Confirm `Looks good — render video` still starts render and returns to Projects.
