@@ -50,6 +50,7 @@ function ProjectsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [checkingId, setCheckingId] = useState<string | null>(null);
   const [playing, setPlaying] = useState<StoredProject | null>(null);
+  const [aspect, setAspect] = useState<number | null>(null);
   const fetchProjects = useServerFn(listProjects);
   const generateVideo = useServerFn(generateProjectVideo);
   const checkStatus = useServerFn(checkProjectStatus);
@@ -253,18 +254,36 @@ function ProjectsPage() {
           </Table>
         </div>
       </main>
-      <Dialog open={!!playing} onOpenChange={(open) => !open && setPlaying(null)}>
-        <DialogContent className="max-w-3xl">
+      <Dialog
+        open={!!playing}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPlaying(null);
+            setAspect(null);
+          }
+        }}
+      >
+        <DialogContent className="p-4 w-fit max-w-[min(90vw,72rem)]">
           <DialogHeader>
             <DialogTitle className="truncate">{playing?.product_url}</DialogTitle>
           </DialogHeader>
           {playing?.video_url ? (
-            <video
-              src={playing.video_url}
-              controls
-              autoPlay
-              className="w-full rounded-md"
-              onPlay={() => {
+            <div
+              className="mx-auto max-h-[80vh] max-w-[90vw]"
+              style={{ aspectRatio: aspect ?? 16 / 9 }}
+            >
+              <video
+                src={playing.video_url}
+                controls
+                autoPlay
+                className="h-full w-full rounded-md object-contain bg-black"
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  if (v.videoWidth && v.videoHeight) {
+                    setAspect(v.videoWidth / v.videoHeight);
+                  }
+                }}
+                onPlay={() => {
                 if (!playing || playedRef.current === playing.id) return;
                 playedRef.current = playing.id;
                 track("video_played", {
@@ -272,8 +291,9 @@ function ProjectsPage() {
                   persona: playing.target_persona,
                   languages: playing.target_languages,
                 });
-              }}
-            />
+                }}
+              />
+            </div>
           ) : null}
         </DialogContent>
       </Dialog>
