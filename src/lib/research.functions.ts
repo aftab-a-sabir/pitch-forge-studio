@@ -96,17 +96,33 @@ async function fetchReadable(url: string): Promise<{
   description: string | null;
   text: string;
 }> {
-  const safe = await assertSafeUrl(url);
-  const res = await fetch(safe.toString(), {
-    method: "GET",
-    redirect: "follow",
-    signal: AbortSignal.timeout(8000),
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; LovableScriptBot/1.0; +https://lovable.dev)",
-      Accept: "text/html,application/xhtml+xml",
-    },
-  });
+  let currentUrl = (await assertSafeUrl(url)).toString();
+  let res: Response | null = null;
+  for (let hop = 0; hop < 5; hop++) {
+    res = await fetch(currentUrl, {
+      method: "GET",
+      redirect: "manual",
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; LovableScriptBot/1.0; +https://lovable.dev)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) break;
+      const nextUrl = new URL(loc, currentUrl).toString();
+      const validated = await assertSafeUrl(nextUrl);
+      currentUrl = validated.toString();
+      continue;
+    }
+    break;
+  }
+  if (!res) throw new Error("Fetch failed");
+  if (res.status >= 300 && res.status < 400) {
+    throw new Error("Too many redirects");
+  }
   if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
   const ctype = res.headers.get("content-type") ?? "";
   if (!ctype.includes("text/html") && !ctype.includes("xml")) {
