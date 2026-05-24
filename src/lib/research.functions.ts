@@ -2,6 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { requireRuntimeSecret } from "./runtime-env.server";
+import { promises as dnsPromises } from "dns";
+import net from "net";
 
 type ProductBrief = {
   name: string;
@@ -26,12 +28,76 @@ function decodeEntities(s: string): string {
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
 }
 
+function isPrivateIPv4(ip: string): boolean {
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a >= 224) return true; // multicast / reserved
+  return false;
+}
+
+function isPrivateIPv6(ip: string): boolean {
+  const lower = ip.toLowerCase();
+  if (lower === "::1" || lower === "::") return true;
+  if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // ULA
+  if (lower.startsWith("fe80")) return true; // link-local
+  if (lower.startsWith("::ffff:")) {
+    const v4 = lower.slice(7);
+    return isPrivateIPv4(v4);
+  }
+  return false;
+}
+
+async function assertSafeUrl(rawUrl: string): Promise<URL> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("Only https:// URLs are allowed");
+  }
+  const hostname = parsed.hostname;
+  if (!hostname || hostname === "localhost") {
+    throw new Error("URL host is not allowed");
+  }
+  // If hostname is a literal IP, check directly.
+  const ipFamily = net.isIP(hostname);
+  if (ipFamily === 4 && isPrivateIPv4(hostname)) throw new Error("URL host is not allowed");
+  if (ipFamily === 6 && isPrivateIPv6(hostname)) throw new Error("URL host is not allowed");
+  if (ipFamily === 0) {
+    try {
+      const records = await dnsPromises.lookup(hostname, { all: true });
+      for (const r of records) {
+        if (r.family === 4 && isPrivateIPv4(r.address)) {
+          throw new Error("URL host resolves to a private address");
+        }
+        if (r.family === 6 && isPrivateIPv6(r.address)) {
+          throw new Error("URL host resolves to a private address");
+        }
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("private")) throw e;
+      throw new Error("Could not resolve URL host");
+    }
+  }
+  return parsed;
+}
+
 async function fetchReadable(url: string): Promise<{
   title: string | null;
   description: string | null;
   text: string;
 }> {
-  const res = await fetch(url, {
+  const safe = await assertSafeUrl(url);
+  const res = await fetch(safe.toString(), {
     method: "GET",
     redirect: "follow",
     signal: AbortSignal.timeout(8000),
