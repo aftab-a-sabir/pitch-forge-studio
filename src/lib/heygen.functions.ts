@@ -67,25 +67,6 @@ async function callHeygen<T>(path: string, init: RequestInit): Promise<T> {
   return parsed as T;
 }
 
-export const createHeygenSession = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
-    z.object({ prompt: z.string().min(1).max(10000) }).parse(input),
-  )
-  .handler(async ({ data }) => {
-    const json = await callHeygen<{ data: HeygenSessionData }>("/v3/video-agents", {
-      method: "POST",
-      body: JSON.stringify({ prompt: data.prompt, mode: "generate" }),
-    });
-    const session = json.data;
-    console.log("heygen.session", {
-      session_id: session.session_id,
-      video_id: session.video_id,
-      status: session.status,
-    });
-    return { session, raw: json };
-  });
-
 export const generateProjectVideo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => z.object({ projectId: z.string().uuid() }).parse(input))
@@ -178,22 +159,6 @@ export const generateProjectVideo = createServerFn({ method: "POST" })
         .eq("id", project.id);
       throw e;
     }
-  });
-
-export const listHeygenSessionVideos = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ sessionId: z.string().min(1) }).parse(input))
-  .handler(async ({ data }) => {
-    const json = await callHeygen<{
-      data: HeygenVideoDetail[];
-      has_more?: boolean;
-      next_token?: string | null;
-    }>(`/v3/video-agents/${encodeURIComponent(data.sessionId)}/videos`, { method: "GET" });
-    return {
-      videos: json.data ?? [],
-      has_more: json.has_more ?? false,
-      next_token: json.next_token ?? null,
-    };
   });
 
 export const checkProjectStatus = createServerFn({ method: "POST" })
